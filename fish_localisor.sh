@@ -16,6 +16,7 @@ NAME=fish_localise
 EXP_DIR=exp_dir/fish_localise
 
 echo --name ${NAME} \
+--train-dir-url ${IMG_DIR} \
 --load-arch-url architecture \
 --exp-dir-url ${EXP_DIR} \
 --target-name crop1 \
@@ -23,8 +24,10 @@ echo --name ${NAME} \
 --crop-h 224 \
 --crop-w 224 \
 --process-recipe-name fetch_rob_crop_recipe \
---slot-annotations-url boundingbox_annotation \
-
+--sloth-annotations-url boundingbox_annotation \
+--aug-params crop1_buckets\
+--fish-types 8 \
+--global-saver-url global
 
 
 echo --test-csv-url ${SAMPLE_SUB} --name ${NAME} \

@@ -3,14 +3,52 @@ import sys
 import re
 import numpy as np
 import copy
+import time
 from collections import OrderedDict
 from mock import Mock
+from setproctitle import setproctitle
 from bunch import Bunch
+import classes.DataLoaderClass
+from sklearn.covariance import empirical_covariance
+from scipy.linalg import eigh
+import multiprocessing as mp
+from multiprocessing import Process
+import traceback
+from Queue import Empty
+from classes.SaverClass import load_obj
+from classes.DataLoaderClass import floatX
 
 
 def ArgparsePair(value):
     w = value.split('%')
     return int(w[0]), int(w[1])
+
+
+def trim(examples, mb_size):
+    l = len(examples)
+    ll = l - l % mb_size
+    examples = examples[0:ll]
+    return examples
+
+
+def repeat(examples, n_samples, mb_size):
+    examples = trim(examples, mb_size)
+    nexamples = []
+    for a in xrange(len(examples) / mb_size):
+        for i in xrange(n_samples):
+            nexamples.extend(examples[a * mb_size: (a + 1) * mb_size])
+    return nexamples
+
+# This has to be picklable
+class EndMarker(object):
+    pass
+
+
+def chunks(l, n):
+    """ Yield successive n-sized chunks from l.
+    """
+    for i in xrange(0, len(l), n):
+        yield l[i:i+n]
 
 
 class BaseUrlTranslator(object):
@@ -88,9 +126,195 @@ class LogTimeseriesObserver(object):
                                                               x=xx, y=yy)
 
 
+class ProcessFunc(object):
+    def __init__(self, process_func, *args, **kwargs):
+        self.process_func = process_func
+        self.args = args
+        self.kwargs = kwargs
+
+    def __call__(self, elem):
+        setproctitle('cnn_worker_thread')
+        recipe_result = self.process_func(elem, *self.args, **self.kwargs)
+        return recipe_result
+
+
+class MinibatchOutputDirector2(object):
+    from classes.DataLoaderClass import floatX
+
+    def __init__(self, mb_size, x_shape, y_shape, x_dtype=floatX, y_dtype=floatX, output_partial_batches=False):
+        self.mb_size = mb_size
+        self.x_shape = x_shape
+        self.y_shape = y_shape
+        self.x_dtype = x_dtype
+        self.y_dtype = y_dtype
+        self.output_partial_batches = output_partial_batches
+
+    def handle_begin(self):
+        self._start_new_mb()
+
+    def handle_result(self, res):
+        self.current_batch.append(res)
+
+        if 'x' in res:
+            #print 'chu', self.current_mb_size, self.mb_size
+            self.mb_x[self.current_mb_size] = res.x
+
+        if 'y' in res:
+            self.mb_y[self.current_mb_size] = res.y
+
+        self.current_mb_size += 1
+
+        if self.current_mb_size == self.mb_size:
+            res = self._get_res()
+            self._start_new_mb()
+            return res
+        else:
+            return None
+
+    def handle_end(self):
+        print 'handle_end'
+        if self.output_partial_batches:
+            print 'OK', self.current_mb_size
+            if len(self.current_batch) != 0:
+                return self._get_res()
+            else:
+                return None
+        else:
+            print 'none'
+            return None
+
+    def _get_res(self):
+        return Bunch(batch=self.current_batch,
+                        mb_x=self.mb_x,
+                        mb_y=self.mb_y)
+
+    def _start_new_mb(self):
+        self.current_mb_size = 0
+        self.current_batch = []
+        self.mb_x = np.zeros(shape=(self.mb_size,) + self.x_shape, dtype=self.x_dtype)
+        self.mb_y = np.zeros(shape=(self.mb_size,) + self.y_shape, dtype=self.y_dtype)
+
+
+class ExceptionMarker(object):
+    def __init__(self, traceback):
+        self.traceback = traceback
+
+    def get_traceback(self):
+        return self.traceback
+
+
+class BufferedProcessor(object):
+    def __init__(self, chunk_loader, buffer_size, add_to_queue_func, name):
+        self.chunk_loader = chunk_loader
+        self.buffer_size = buffer_size
+        self.add_to_queue_func = add_to_queue_func
+        self.name = name
+
+    def get_iterator(self):
+        def reader_process(chunk_loader, buffer, add_to_queue_func):
+            # NOTICE:
+            # We have to catch any exception raised in this process, and pass it to the parent
+            # which is waiting on the Queue. Any better solution?
+
+            try:
+                setproctitle('cnn_buffered_processor' + self.name)
+                idx = 0
+                chunk_loader_iter = chunk_loader.get_iterator()
+
+                while True:
+                    try:
+                        v = chunk_loader_iter.next()
+                    except StopIteration:
+                        break
+                    add_to_queue_func(buffer, v)
+                    idx += 1
+
+                buffer.put(EndMarker())
+            except Exception as e:
+                buffer.put(ExceptionMarker(traceback.format_exc()))
+
+        buffer = mp.Queue(maxsize=self.buffer_size)
+        process = Process(target=reader_process, args=(self.chunk_loader, buffer, self.add_to_queue_func))
+        process.start()
+        TIMEOUT_IN_SECONDS = 600
+
+        while True:
+            #print 'BufferedProcessor', 'trying to get from the queue', buffer.qsize()
+            try:
+                v = buffer.get(timeout=TIMEOUT_IN_SECONDS)
+            except Empty:
+                print 'something is going wrong, could not get from buffer'
+                raise
+
+            if isinstance(v, EndMarker):
+                break
+
+            if isinstance(v, ExceptionMarker):
+                raise RuntimeError(v.get_traceback())
+            else:
+                #print 'roz', buffer.qsize()
+                yield v
+
+        process.join()
+
+
+class MultiprocessingChunkProcessor(object):
+    def __init__(self, process_func, elements_to_process, output_director, chunk_size, pool_size=4, map_chunksize=4):
+        """
+        :param pre_func:
+        :param process_func:
+        :param post_func:
+        :param examples:
+        :param chunk_size: Yielded items will be of size 'chunk_size'.
+        :param pool_size:
+        :return:
+        """
+        self.process_func = process_func
+        self.elements_to_process = elements_to_process
+        self.output_director = output_director
+        self.chunk_size = chunk_size
+        self.pool_size = pool_size
+
+    def get_iterator(self):
+        pool = mp.Pool(self.pool_size)
+        # pool = ThreadPool(pool_size)
+
+        self.output_director.handle_begin()
+        print 'Will try to pickle', type(self.process_func)
+        for chunk in chunks(self.elements_to_process, self.chunk_size):
+            chunk_results = pool.map(self.process_func, chunk, chunksize=4)
+            for chunk_result in chunk_results:
+                res = self.output_director.handle_result(chunk_result)
+                if res is not None:
+                    yield res
+
+        print 100 * 'end'
+        res = self.output_director.handle_end()
+        if res is not None:
+            yield res
+
+        pool.close()
+        pool.join()
+
+
+def create_standard_iterator(process_func, elements_to_process, output_director, pool_size=4, buffer_size=20, chunk_size=100):
+
+    def add_to_queue_func(buffer_queue, item):
+        while buffer_queue.full():
+            #print 'buffer is full, sleep for a while.', buffer_queue.qsize()
+            time.sleep(5)
+        #print 'put to buffer_queue'
+        buffer_queue.put(item)
+
+    return BufferedProcessor(
+        MultiprocessingChunkProcessor(process_func, elements_to_process, output_director, chunk_size=chunk_size,
+                                      pool_size=pool_size),
+        buffer_size=buffer_size,
+        add_to_queue_func=add_to_queue_func,
+        name='get_valid_iterator').get_iterator()
+
+
 class BaseTrainer(object):
-    def __init__(self):
-        pass
 
     @classmethod
     def get_n_outs(cls, TARGETS):
@@ -120,8 +344,8 @@ class BaseTrainer(object):
         parser.add_argument('--mode', type=str, default=None, help='TODO')
 
         # annos
-        parser.add_argument('--slot-annotations-url', type=str, default=None, help='TODO')
-        parser.add_argument('--auto-slot-annotations-url', type=str, default=None, help='TODO')
+        parser.add_argument('--sloth-annotations-url', type=str, default=None, help='TODO')
+        parser.add_argument('--auto-sloth-annotations-url', type=str, default=None, help='TODO')
         parser.add_argument('--auto-indygo-annotations-url', type=str, default=None, help='TODO')
         parser.add_argument('--ryj-conn-annotations-url', type=str, default=None, help='TODO')
         parser.add_argument('--symetria-csv-url', type=str, default=None, help='TODO')
@@ -142,6 +366,7 @@ class BaseTrainer(object):
         parser.add_argument('--global-saver-url', type=str, default='global', help='TODO')
 
         # dataloading
+        parser.add_argument('--fish-types', type=int, default=7, help='TODO')
         parser.add_argument('--valid-pool-size', type=int, default=6, help='TODO')
         parser.add_argument('--train-pool-size', type=int, default=4, help='TODO')
         parser.add_argument('--test-pool-size', type=int, default=4, help='TODO')
@@ -245,6 +470,107 @@ class BaseTrainer(object):
         parser.add_argument('--dummy-run', action='store_true', help='TODO')
 
         return parser
+
+    def pca_it(self, spec, recipes, process_recipe):
+        MB_SIZE = 10
+        process_func = ProcessFunc(process_recipe, spec)
+        output_director = MinibatchOutputDirector2(MB_SIZE,
+                                                   x_shape=(spec['target_channels'], spec['target_h'], spec['target_w']),
+                                                   y_shape=(self.Y_SHAPE,))
+
+        iterator = create_standard_iterator(process_func, recipes, output_director, pool_size=6, buffer_size=40, chunk_size=MB_SIZE * 3)
+
+        print 'computing eigenvalues ...'
+        X = np.concatenate([batch['mb_x'][0, ...].reshape((3, -1)).T for batch in iterator])
+        n = X.shape[0]
+        limit = 125829120
+        if n > limit:
+            X = X[np.random.randint(n, size=limit), :]
+        print X.shape
+        cov = empirical_covariance(X)
+        print cov
+        evs, U = eigh(cov)
+        print evs
+        print U
+
+        return evs, U
+
+    def estimeate_mean_var(self, iterator):
+        channels = self.args.channels
+        mean = np.zeros((channels,), dtype=floatX)
+        var = np.zeros((channels,), dtype=floatX)
+        n_examples = 0
+        h, w = None, None
+
+        for mb_idx, item in enumerate(iterator):
+            print 'MB_IDX', mb_idx
+
+            mb_x = item['mb_x']
+            h = mb_x.shape[2]
+            w = mb_x.shape[3]
+            for idx in xrange(mb_x.shape[0]):
+                n_examples += 1
+
+                for channel in xrange(channels):
+                    mean[channel] += np.sum(mb_x[idx, channel, ...])
+                    var[channel] += np.sum(mb_x[idx, channel, ...] ** 2)
+
+        mean /= n_examples * h * w
+        var /= n_examples * h * w
+        return mean, var
+
+    def get_mean_std(self, spec, recipes, test_recipes):
+        spec = copy.copy(spec)
+
+        if self.args.no_est:
+            mean = [0] * self.args.channels
+            std = [1] * self.args.channels
+        else:
+            if self.args.mean_data_path is None:
+
+                h = classes.DataLoaderClass.my_portable_hash([spec, len(recipes)])
+                name = 'mean_std_{}'.format(h)
+                print 'mean_std filename', name
+                res = self.global_saver.load_obj(name)
+
+                if res is None or self.args.invalid_cache:
+                    print '..recomputing mean, std'
+
+                    MB_SIZE = 40
+                    process_func = ProcessFunc(self.process_recipe, spec)
+                    output_director = MinibatchOutputDirector2(MB_SIZE,
+                                                               x_shape=(spec['target_channels'], spec['target_h'], spec['target_w']),
+                                                               y_shape=(self.Y_SHAPE,))
+
+                    iterator = create_standard_iterator(process_func, recipes, output_director, pool_size=6, buffer_size=40, chunk_size=3 * MB_SIZE)
+
+                    mean, _ = self.estimeate_mean_var(iterator)
+                    spec.mean = mean
+                    iterator = create_standard_iterator(process_func, recipes, output_director, pool_size=6, buffer_size=40, chunk_size=3 * MB_SIZE)
+                    mean2, std_kw = self.estimeate_mean_var(iterator)
+                    std = np.sqrt(std_kw)
+                    print 'mean2', mean2
+                    spec.std = std
+                    iterator = create_standard_iterator(process_func, test_recipes, output_director, pool_size=6, buffer_size=40, chunk_size=3 * MB_SIZE)
+                    res = self.estimeate_mean_var(iterator)
+                    print res
+                    mean_data_path = self.global_saver.save_obj((mean, std), name)
+                    self.exp.set_mean_data_url(mean_data_path)
+                else:
+                    print '..using cached mean, std'
+                    mean, std = res[0], res[1]
+            else:
+                mean_data = load_obj(self.args.mean_data_path)
+                if len(mean_data) == 2:
+                    mean, std = mean_data[0], mean_data[1]
+                elif len(mean_data) == 3:
+                    # historical compability
+                    mean = np.asarray(mean_data)
+                    std = np.asarray([255.0, 255.0, 255.0])
+                else:
+                    raise RuntimeError()
+
+        return mean, std
 
     def create_control_parser(self, default_owner):
         parser = argparse.ArgumentParser(description='TODO', fromfile_prefix_chars='@')
