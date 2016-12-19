@@ -1,7 +1,11 @@
 import sys
+import os
 import numpy as np
 import random
 from termcolor import colored
+
+import json
+from collections import defaultdict
 
 from TrainerClass import BaseTrainer
 from SaverClass import ExperimentSaver, Tee
@@ -9,26 +13,13 @@ import DataLoaderClass
 from utils.theano_utils import set_theano_fast_compile, set_theano_fast_run
 
 
-class Trainer(BaseTrainer):
+class FishClass(BaseTrainer):
     @classmethod
-    def get_n_outs(cls, TARGETS):
-        return map(lambda a: a[1], TARGETS)
+    def norm_name(cls, key):
+        if key[-4:] == '.jpg':
+            key = key[-13:-4]
+        return key
 
-    @classmethod
-    def get_intervals(cls, TARGETS):
-        res = []
-        s = 0
-        for _, n_out in TARGETS:
-            res.append((s, s + n_out))
-            s += n_out
-        return res
-
-    @classmethod
-    def get_y_shape(cls, TARGETS):
-        return sum(map(lambda a: a[1], TARGETS))
-
-
-class FishClass(Trainer):
     def initialize(self):
         np.random.seed(None)
         seed = np.random.randint(0, 1000000000)
@@ -64,18 +55,16 @@ class FishClass(Trainer):
             sys.stdout = self.tee_stdout
             sys.stderr = self.tee_stderr
 
-            self.exp.set_log_url(self.url_translator.path_to_url(filepath))
-
     def set_targets(self):
         MANY_TARGETS = {
             'final':
                 [
-                    ('class', 447),
+                    ('class', 7),
                     ('new_conn', 2),
                 ],
             'final_no_conn':
                 [
-                    ('class', 447),
+                    ('class', 7),
                 ],
             'crop1':
                 [
@@ -90,7 +79,7 @@ class FishClass(Trainer):
                 ],
             'crop2':
                 [
-                    ('class', 447),
+                    ('class', 7),
                     ('conn', 2),
                     ('indygo_point1_x', self.args.buckets),
                     ('indygo_point1_y', self.args.buckets),
@@ -103,7 +92,7 @@ class FishClass(Trainer):
         self.Y_SHAPE = sum(self.get_n_outs(self.TARGETS))
 
     def construct_model(self, arch_name, **kwargs):
-        module_name = 'architectures.' + arch_name
+        module_name = 'architecture.' + arch_name
         mod = __import__(module_name, fromlist=[''])
         return getattr(mod, 'create_model')(**kwargs)
 
@@ -147,7 +136,6 @@ class FishClass(Trainer):
         self.initialize()
         self.set_targets()
         self.ts = self.create_timeseries_and_figures()
-        self.init_shared(self.args.mb_size)
         self.init_model()
 
         self.process_recipe = getattr(DataLoaderClass, self.args.process_recipe_name)
@@ -156,10 +144,73 @@ class FishClass(Trainer):
 
         return 0
 
+    def read_annotations(self):
+
+        annotations = defaultdict(dict)
+        fish_folders = ['OTHER', 'ALB', 'BET', 'DOL', 'LAG', 'SHARK', 'YFT']
+
+        def f_annotation_largest(l, anno_name, fld, fn):
+            '''
+            We read the boundingbox that contains the largest area.
+            The reason is that since there is only one fish type on the boat, we can temporally assume that
+            there is only one fish on the boat.
+            TODO: try DetectNet; Deep Neural Network for Object Detection in DIGITS
+            https://devblogs.nvidia.com/parallelforall/detectnet-deep-neural-network-object-detection-digits/
+            :param l:
+            :param anno_name:
+            :return:
+            '''
+            count = 0
+            for el in l:
+                if 'filename' in el:
+                    key = el['filename']
+                key = self.norm_name(self.norm_name(key))
+                key += '.jpg'
+
+                if 'annotations' not in el or len(el['annotations']) < 1:
+                    print("No annotation for " + fld + '/' + key)
+                else:
+                    # if there is more than one labeled fish on the boat
+                    fish_idx = 0
+                    if len(el['annotations']) > 1:
+                        area_array = np.zeros(len(el['annotations']))
+                        for i in range(len(el['annotations'])):
+                            area_array[i] = el['annotations'][i]['height'] * el['annotations'][i]['width']
+                        fish_idx = np.argmax(area_array)
+
+                    annotations[key][anno_name] = el['annotations'][fish_idx]
+                    annotations[key][anno_name]['fish_class'] = fn
+                    count += 1
+            return count
+
+        def clean_anno(l):
+            for i,el in enumerate(l):
+                if 'filename' in el:
+                    key = el['filename']
+                key = self.norm_name(self.norm_name(key))
+                l[i]['filename'] = key +'.jpg'
+            return l
+
+        if self.args.slot_annotations_url is not None:
+            for fn, fld in enumerate(fish_folders):
+                json_path = os.path.join(self.args.slot_annotations_url, fld.lower()+"_labels.json")
+                slot_annotations_list = json.load(open(json_path, 'r'))
+                count = f_annotation_largest(slot_annotations_list, 'slot', fld, fn)
+                print('loading class ' + fld + ', number of annotation is: ' + str(count))
+
+                # l = clean_anno(slot_annotations_list)
+                # with open(os.path.join('../clean_boundingbox', fld.lower()+"_labels.json"), 'w') as outfile:
+                #     json.dump(l, outfile)
+
+        print("Finish loading images, total number of images is: " + str(len(annotations)))
+        return annotations
+
     def do_training(self):
 
-        pass
+        self.annotations = self.read_annotations()
+
+        print 'Params info before training'
 
 
-
-
+if __name__ == '__main__':
+    sys.exit(0)

@@ -6,8 +6,6 @@ from bunch import Bunch
 from skimage.transform import warp, SimilarityTransform, AffineTransform, estimate_transform
 from keras.preprocessing import image
 
-from FishClass import FishClass
-
 float32 = 'float32'
 floatX = float32
 
