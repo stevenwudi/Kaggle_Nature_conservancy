@@ -30,7 +30,7 @@ magik_z = {
 
 crop1_buckets = {
     'zoom_range': (1.0 / 1.2, 1.2),
-    'rotation_range': (0, 360),
+    'rotation_range': (0, 10),
     'shear_range': (0, 0),
     'translation_range': (0, 0),
     'do_flip': True,
@@ -52,7 +52,7 @@ def my_portable_hash(l):
 def fetch_path_local(path):
     # This returns images in HxWxC format, dtyep = uint8 probably
     img = scipy.misc.imread(path)
-    # for from keras.preprocessing import image, image will be 3* H 8 W
+    # for from keras.preprocessing import image, image will be 3* H * W
 
     if len(img.shape) == 2:
         # Some images are in grayscale
@@ -155,7 +155,6 @@ def transformation(img, spec, perturb):
     mean = spec['mean']
     std = spec['std']
     img = img.astype(dtype=floatX)
-    # img /= 255.0
 
     def apply_mean_std(img):
         if mean is not None:
@@ -195,11 +194,14 @@ def transformation(img, spec, perturb):
 
 
 def find_bucket(s, buckets, wsp):
-    if wsp < 0 or wsp >= s:
-        return -1
-    res = int(floor((wsp * buckets) / s))
-    assert (res >= 0 and res < buckets)
-    return res
+    if wsp < 0:
+        return 0
+    elif wsp >= s:
+        return buckets-1
+    else:
+        res = int(floor((wsp * buckets) / s))
+        assert (res >= 0 and res < buckets)
+        return res
 
 
 

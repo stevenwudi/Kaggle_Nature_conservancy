@@ -4,6 +4,7 @@ import re
 import numpy as np
 import copy
 import time
+import datetime
 from collections import OrderedDict
 from mock import Mock
 from setproctitle import setproctitle
@@ -17,6 +18,16 @@ import traceback
 from Queue import Empty
 from classes.SaverClass import load_obj
 from classes.DataLoaderClass import floatX
+from bson import Binary
+import cPickle
+
+
+def epoch_header(epoch_idx):
+    return (50 * '-') + ' epoch_idx = ' + str(epoch_idx) + ' ' + (50 * '-')
+
+
+def timestamp_str():
+    return datetime.datetime.fromtimestamp(time.time()).strftime('%m_%d_%H_%M_%S')
 
 
 def ArgparsePair(value):
@@ -38,6 +49,15 @@ def repeat(examples, n_samples, mb_size):
         for i in xrange(n_samples):
             nexamples.extend(examples[a * mb_size: (a + 1) * mb_size])
     return nexamples
+
+
+def elapsed_time_ms(timer):
+    return (time.time() - timer) * 1000
+
+
+def elapsed_time_mins(timer):
+    return (time.time() - timer) / 60
+
 
 # This has to be picklable
 class EndMarker(object):
@@ -288,7 +308,7 @@ class MultiprocessingChunkProcessor(object):
                 if res is not None:
                     yield res
 
-        print 100 * 'end'
+        print(100 * 'MultiprocessingChunkProcessor_end')
         res = self.output_director.handle_end()
         if res is not None:
             yield res
@@ -312,6 +332,26 @@ def create_standard_iterator(process_func, elements_to_process, output_director,
         buffer_size=buffer_size,
         add_to_queue_func=add_to_queue_func,
         name='get_valid_iterator').get_iterator()
+
+
+class EpochData(object):
+    def __init__(self, **kwargs):
+        self.d = {}
+        for key, value in kwargs.iteritems():
+            self.set_field(key, value)
+
+    def as_dict(self):
+        return copy.copy(self.d)
+
+    def set_field(self, field, value):
+        self.d[field] = value
+
+    def encode(self):
+        return Binary(cPickle.dumps(self, protocol=2), 128)
+
+    @classmethod
+    def decode(cls, binary):
+        return cPickle.loads(binary)
 
 
 class BaseTrainer(object):
@@ -367,7 +407,7 @@ class BaseTrainer(object):
 
         # dataloading
         parser.add_argument('--fish-types', type=int, default=7, help='TODO')
-        parser.add_argument('--valid-pool-size', type=int, default=6, help='TODO')
+        parser.add_argument('--valid-pool-size', type=int, default=4, help='TODO')
         parser.add_argument('--train-pool-size', type=int, default=4, help='TODO')
         parser.add_argument('--test-pool-size', type=int, default=4, help='TODO')
         parser.add_argument('--train-buffer-size', type=int, default=100, help='TODO')
@@ -429,6 +469,7 @@ class BaseTrainer(object):
         parser.add_argument('--do-mean', type=int, default=1, help='TODO')
         parser.add_argument('--do-dump', type=int, default=1, help='TODO')
 
+        # CNN learning related
         parser.add_argument('--n-classes', type=int, default=2, help='TODO')
         parser.add_argument('--loss-freq', type=int, default=1, help='TODO')
         parser.add_argument('--monitor-freq', type=int, default=9999999, help='TODO')
@@ -438,10 +479,11 @@ class BaseTrainer(object):
         parser.add_argument('--nof-best-crops', type=int, default=1, help='TODO')
         parser.add_argument('--n-samples-valid', type=int, default=None, help='TODO')
         parser.add_argument('--n-samples-test', type=int, default=None, help='TODO')
+        parser.add_argument('--momentum', type=float, default=0.9, help="momentum value")
 
         parser.add_argument('--l2-reg-global', type=float, default=1.0, help='TODO')
         parser.add_argument('--glr', type=float, default=None, help='TODO')
-        parser.add_argument('--valid-freq', type=int, default=5, help='TODO')
+        parser.add_argument('--valid-freq', type=int, default=1, help='TODO')
         parser.add_argument('--glr-burnout', type=int, default=19999999, help='TODO')
         parser.add_argument('--glr-decay', type=float, default=1.0, help='TODO')
 
@@ -449,6 +491,7 @@ class BaseTrainer(object):
         parser.add_argument('--log-name', type=str, default='log.txt', help='TODO')
         parser.add_argument('--no-train', action='store_true', help='TODO')
         parser.add_argument('--debug', action='store_true', help='TODO')
+        parser.add_argument('--debug_plot', type=int, default=None, help='TODO')
         parser.add_argument('--seed', type=int, default=None, help='TODO')
         parser.add_argument('--valid-seed', type=int, default=None, help='TODO')
         parser.add_argument('--method', type=str, default='rmsprop', help='TODO')
@@ -456,7 +499,8 @@ class BaseTrainer(object):
         parser.add_argument('--process-recipe-name', type=str, default=None, help='TODO')
 
         # hyperparams
-        parser.add_argument('--dropout', type=float, default=None, help='TODO')
+        parser.add_argument('--dropout', type=int, default=1, help='TODO')
+        parser.add_argument('--dropout-coeff', type=float, default=0.5, help='TODO')
         parser.add_argument('--fc-l2-reg', type=float, default=None, help='TODO')
         parser.add_argument('--conv-l2-reg', type=float, default=None, help='TODO')
         parser.add_argument('--n-fc', type=float, default=None, help='TODO')
@@ -676,6 +720,79 @@ class BaseTrainer(object):
                 getattr(ts, ts_name).add_add_observer(observer)
 
         return ts
+
+    def show_images(self, train_iterator, n):
+        import matplotlib.pyplot as plt
+
+        def plot_image_to_file(img, filepath, interpolation='none', only_image=True):
+            if only_image:
+                from PIL import Image
+                if img.dtype in ['float32']:
+                    data = np.asarray(img * 255, dtype=np.uint8)
+                elif img.dtype in ['int32', 'uint8']:
+                    data = np.asarray(img, dtype=np.uint8)
+                im = Image.fromarray(data, 'RGB')
+                im.save(filepath)
+                return filepath
+            else:
+                plt.imshow(img, interpolation=interpolation)
+                plt.savefig(filepath)
+                return filepath
+
+        k = 0
+
+        def apply_mean_std_inverse(img, mean, std, channels):
+            if std is not None:
+                assert (len(std) == channels)
+                for channel in xrange(channels):
+                    img[:, :, channel] *= std[channel]
+
+            if mean is not None:
+                assert (len(mean) == channels)
+                for channel in xrange(channels):
+                    img[:, :, channel] += mean[channel]
+
+            return img
+
+        for mb_idx, item in enumerate(train_iterator):
+            print 'item', type(item)
+            mb_x, mb_y = item['mb_x'], item['mb_y']
+            batch = item['batch']
+            mb_size = len(batch)
+
+            for j in xrange(mb_size):
+                img = np.rollaxis(mb_x[j, ...], axis=0, start=3)
+                name = batch[j].recipe.name
+
+                img = apply_mean_std_inverse(img, self.mean, self.std, self.args.channels)
+
+                path_suffix = ''
+                class_inter = self.get_interval('class', self.TARGETS)
+                if class_inter is not None:
+                    class_idx = np.argmax(mb_y[j, class_inter[0]:class_inter[1]])
+                    path_suffix += '_class_idx_' + str(class_idx)
+
+                crop2_inter = self.get_interval('crop2', self.TARGETS)
+                if crop2_inter is not None:
+                    crop2_idx = np.argmax(mb_y[j, crop2_inter[0]:crop2_inter[1]])
+                    path_suffix += '_crop2_idx_' + str(crop2_idx)
+
+                conn_inter = self.get_interval('conn', self.TARGETS)
+                if conn_inter is not None:
+                    ryj_conn_idx = np.argmax(mb_y[j, conn_inter[0]: conn_inter[1]])
+                    if mb_y[j][ryj_conn_idx + conn_inter[0]] < 0.5:
+                        ryj_conn_idx = -1
+                else:
+                    ryj_conn_idx = -2
+
+                filename = 'img_{mb_idx}_{name}'.format(mb_idx=mb_idx, name=name) + path_suffix + '.jpg'
+                path = self.saver.get_path('imgs', filename)
+
+                print 'show_images: saving to ', path
+                plot_image_to_file(img, path)
+                k += 1
+                if k >= n:
+                    return
 
     def main(self, *args, **kwargs):
         parser = self.create_parser()

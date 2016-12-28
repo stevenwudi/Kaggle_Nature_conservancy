@@ -13,3 +13,4 @@ if __name__ == '__main__':
     sys.exit(fish_class.main(default_owner=default_owner,
                              paths_to_dump=paths_to_dump,
                              python_paths=python_paths))
+

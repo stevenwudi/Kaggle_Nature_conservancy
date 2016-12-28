@@ -1,5 +1,7 @@
 .idea/
 exp_dir
 boundingbox_annotation
+head_tail_annotation
+global
 *.pyc
 

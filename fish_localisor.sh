@@ -27,7 +27,21 @@ echo --name ${NAME} \
 --sloth-annotations-url boundingbox_annotation \
 --aug-params crop1_buckets\
 --fish-types 8 \
---global-saver-url global
+--global-saver-url global \
+--glr 0.01 \
+--glr-burnout 15  \
+--momentum 0.9 \
+--glr-decay 0.9955 \
+--fc-l2-reg 0.05 \
+--conv-l2-reg 0.0005 \
+--dropout 0 \
+--dropout-coeff 0.5 \
+--debug_plot 0 \
+--n-samples-valid 1 \
+--mb-size 64 \
+--buckets 60 \
+--monitor-freq 50 \
+
 
 
 echo --test-csv-url ${SAMPLE_SUB} --name ${NAME} \
