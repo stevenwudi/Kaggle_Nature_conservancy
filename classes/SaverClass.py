@@ -3,6 +3,12 @@ import pickle
 import cPickle
 import errno
 from bunch import Bunch
+import random
+import string
+
+
+def id_generator(n):
+   return ''.join(random.SystemRandom().choice(string.ascii_lowercase + string.digits) for _ in range(n))
 
 
 def mkdir_p(path):

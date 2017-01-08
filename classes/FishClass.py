@@ -8,8 +8,10 @@ import json
 import time
 from collections import defaultdict
 import theano
+import keras
+
 from classes.TrainerClass import BaseTrainer
-from classes.SaverClass import ExperimentSaver, Tee, load_obj, Saver
+from classes.SaverClass import ExperimentSaver, Tee, load_obj, Saver, id_generator
 import classes.DataLoaderClass
 from classes.DataLoaderClass import unpack, floatX, fetch_path_local, random_perturbation_transform, \
     build_center_uncenter_transforms2, transformation, find_bucket
@@ -254,8 +256,10 @@ class FishClass(BaseTrainer):
 
     def init_model(self):
         if self.args.load_arch_path is not None:
-            print '..loading arch'
-            self.model = self.saver.load_path(self.args.load_arch_path)
+            print '..loading arch and model'
+            self.model = keras.models.load_model(self.args.load_arch_path)
+            # this is a bad hack
+            self.model.optimizer.lr.set_value(0.1)
         else:
             params = {
                 'channels': self.args.channels,
@@ -583,44 +587,29 @@ class FishClass(BaseTrainer):
                                                                          real_valid_shuffle=self.args.real_valid_shuffle)
 
                     # one_train_epoch
-                    if self.args.no_train_update is False:
-                        print('n_train_batches %d, n_valid_batches; %d' % (n_train_batches, n_valid_batches))
-                        train_losses = unpack(self.do_train_epoch(epoch_params, train_iterator, self.model),
-                                              'train_losses')
+                    print('n_train_batches %d, n_valid_batches; %d' % (n_train_batches, n_valid_batches))
+                    train_losses = unpack(self.do_train_epoch(epoch_params, train_iterator, self.model), 'train_losses')
+                    # one_valid_epoch
+                    valid_losses = self.do_valid_epoch(epoch_idx, epoch_params, valid_iterator, self.model)
+                    # stats + saving
+                    file_name = 'epoch_' + str(epoch_idx)+'_' + self.args.arch
+
+                    if epoch_idx % self.args.SAVE_FREQ == 0:
+                        model_path = os.path.join(self.exp_dir_path, 'training', file_name + '.h5')
+                        self.model.save(model_path)
                     else:
-                        train_losses = [-1.0]
-                        train_costs = [-1.0]
+                        model_path = None
 
-                    #######################################################################
-                    print 'Epoch', epoch_idx, 'train_losses', np.mean(train_losses)
-                    if False:
-                        # validation
-                        if epoch_idx % self.args.valid_freq == 0 and epoch_idx > 0:
-                            valid_losses = self.do_valid_epoch(epoch_idx, epoch_params, valid_iterator, self.args.n_samples_valid, real_valid_len=real_valid_len)
-                        else:
-                            valid_losses = [0]
+                    epoch_data = EpochData(train_loss=np.mean(train_losses),
+                                           valid_loss=np.mean(valid_losses),
+                                           train_losses=train_losses,
+                                           valid_losses=valid_losses,
+                                           epoch_params=epoch_params,
+                                           model_path=model_path)
+                    self.exp.add_epoch_data(epoch_data.encode())
 
-                        # stats + saving
-                        timestamp_str_ = timestamp_str()
-                        file_name = 'epoch_' + str(epoch_idx)
-
-                        if epoch_idx % self.args.SAVE_FREQ == 0:
-                            model_path = self.save_model(self.model, file_name)
-                        else:
-                            model_path = None
-
-                        epoch_data = EpochData(train_loss=np.mean(train_losses),
-                                               valid_loss=np.mean(valid_losses),
-                                               train_cost=np.mean(train_costs),
-                                               train_costs=train_costs,
-                                               train_losses=train_losses,
-                                               valid_losses=valid_losses,
-                                               epoch_params=epoch_params,
-                                               model_path=self.url_translator.path_to_url(model_path))
-                        self.exp.add_epoch_data(epoch_data.encode())
-
-                        print 'Epoch', epoch_idx, 'train_losses', np.mean(train_losses), 'valid_losses', np.mean(valid_losses)
-                        print epoch_params
+                    print 'Epoch', epoch_idx, 'train_losses', np.mean(train_losses), 'valid_losses', np.mean(valid_losses)
+                    print epoch_params
 
             except KeyboardInterrupt as e:
                 print 'Early break.'
@@ -664,6 +653,7 @@ class FishClass(BaseTrainer):
                 loss = loss_batch[i+1]
                 ts = getattr(self.ts, 'train_loss_' + suff)
                 ts.add(np.mean(loss))
+                train_losses.append(np.mean(loss))
 
             if mb_idx % 10 == 0:
                 self.exp.update_ping()
@@ -682,134 +672,34 @@ class FishClass(BaseTrainer):
 
         return Bunch(train_losses=train_losses)
 
-    def do_valid_epoch(self, epoch_idx, epoch_params, valid_iterator, n_samples, real_valid_len):
-        print 'read_valid_l', real_valid_len
-        lines_done = 0
-        lines_done_2 = 0
-        valid_id = ml_utils.id_generator(5)
-        valid_submit_file = self.saver.open_file(None,
-                                                 'valid_submit_{epoch_idx}_{valid_id}.csv'.format(epoch_idx=epoch_idx,
-                                                                                                  valid_id=valid_id)).file
-        valid_all_samples_submit_file = self.saver.open_file(None,
-                                                             'valid_all_samples_submit_{}.csv'.format(valid_id)).file
+    def do_valid_epoch(self, epoch_idx, epoch_params, valid_iterator, model):
+
+        valid_id = id_generator(5)
+        valid_submit_file = self.saver.open_file(None, 'valid_submit_{epoch_idx}_{valid_id}.csv'.format(epoch_idx=epoch_idx,valid_id=valid_id)).file
+        valid_all_samples_submit_file = self.saver.open_file(None, 'valid_all_samples_submit_{}.csv'.format(valid_id)).file
 
         valid_losses = defaultdict(list)
-        valid_top5_acc = defaultdict(list)
-        mb_idx = 0
-        epoch_timer = start_timer()
-        verbose_valid = self.args.verbose_valid
-
-        losses = defaultdict(list)
-        losses_list = []
-        results = None
+        epoch_timer = time.time()
 
         full_valid = []
-        try:
-            p_y_given_x_ans = np.zeros(shape=(1, epoch_params['mb_size'], self.Y_SHAPE), dtype=floatX)
-            p_y_given_x_all = np.zeros(shape=(epoch_params['mb_size'], self.Y_SHAPE, n_samples), dtype=floatX)
-            vidx = 0
-            while True:
-                self.command_receiver.handle_commands(ct)
-                mb_size = epoch_params['mb_size']
-                recipes = None
-                infos = []
-                mb_xs = []
-                for samples_idx in xrange(n_samples):
-                    item = valid_iterator.next()
-                    mb_x, mb_y = item['mb_x'], item['mb_y']
-                    mb_xs.append(mb_x)
-                    results = item['batch']
-                    infos.append(map(lambda a: a.info, results))
-                    current_mb_size = len(results)
-                    mb_y_corr = mb_y
+        p_y_given_x_all = np.zeros(shape=(epoch_params['mb_size'], self.Y_SHAPE), dtype=floatX)
 
-                    self.x_sh.set_value(mb_x)
-                    self.y_sh.set_value(mb_y)
+        for mb_idx, item in enumerate(valid_iterator):
+            mb_x, mb_y = item['mb_x'], item['mb_y']
+            # predict the valid data
+            res = model.predict_on_batch(mb_x)
+            p_y_given_x_all[:, :] = np.concatenate(res, axis=1)
 
-                    res = valid_function(epoch_params['l2_reg_global'], epoch_params['mb_size'])
-
-                    p_y_given_x = res['p_y_given_x']
-
-                    p_y_given_x_all[:, :, samples_idx] = p_y_given_x
-
-                p_y_given_x_ans[0, ...] = np.mean(p_y_given_x_all, axis=2)
-
-                for j in xrange(mb_x.shape[0]):
-                    if lines_done < real_valid_len:
-                        name = results[j].recipe.name
-
-                        if self.args.write_valid_preds_all:
-                            for sample_idx in xrange(n_samples):
-                                preds = p_y_given_x_all[j, :, sample_idx]
-                                full_valid.append(Bunch(
-                                    sample_idx=sample_idx,
-                                    name=name,
-                                    info=infos[sample_idx][j],
-                                    preds=self.permute_preds(self.strclass_to_class_idx, preds[:447])
-                                ))
-
-                                p = '{name}_{sample_idx}.jpg'.format(name=name, sample_idx=sample_idx)
-
-                                path = self.saver.get_path('full_valid_imgs', p)
-                                img = np.rollaxis(mb_xs[sample_idx][j, ...], axis=0, start=3)
-
-                                img = self.rev_img(img, self.mean, self.std)
-
-                                loss = -(mb_y_corr[j, :447] * np.log(preds[:447])).sum()
-                                print 'show_images: saving to ', path, 'loss', loss
-                                plot_image_to_file2(img, path)
-
-                                self.write_preds(self.strclass_to_class_idx, preds[:447], name,
-                                                 valid_all_samples_submit_file)
-
-                            preds = p_y_given_x_ans[0, j, ...]
-                            self.write_preds(self.strclass_to_class_idx, preds[:447], name, valid_submit_file)
-
-                        lines_done += 1
-
-                for suff, interval in zip(self.get_target_suffixes(self.TARGETS), self.get_intervals(self.TARGETS)):
-                    temp_lines_done_2 = lines_done_2
-                    valid_loss = ml_utils.categorical_crossentropy(p_y_given_x_ans[0, :, interval[0]:interval[1]],
-                                                                   mb_y_corr[:, interval[0]:interval[1]])
-
-                    if suff == 'class':
-                        top5_accuracy = ml_utils.get_top_k_accuracy(p_y_given_x_ans[0, :, interval[0]:interval[1]],
-                                                                    np.argmax(mb_y_corr[:, interval[0]:interval[1]],
-                                                                              axis=1), k=5)
-                        print 'partial top5', top5_accuracy
-                        valid_top5_acc[suff].append(top5_accuracy)
-
-                    if suff == 'class':
-                        print np.mean(valid_loss)
-
-                    for j in xrange(mb_x.shape[0]):
-                        if temp_lines_done_2 < real_valid_len:
-                            valid_losses[suff].append(valid_loss[j])
-                            temp_lines_done_2 += 1
-                        else:
-                            break
-
-                lines_done_2 = temp_lines_done_2
-
-                if mb_idx % 10 == 0:
-                    self.exp.update_ping()
-                mb_idx += 1
-
-        except StopIteration:
-            pass
-
-        print valid_losses['class']
+            for suff, interval in zip(self.get_target_suffixes(self.TARGETS), self.get_intervals(self.TARGETS)):
+                # valid_loss will be of dimension equals to # batch
+                valid_loss = -(mb_y[:, interval[0]:interval[1]] * np.log(p_y_given_x_all[:, interval[0]:interval[1]])).sum(axis=1)
+                valid_losses[suff].append(valid_loss)
 
         for suff in self.get_target_suffixes(self.TARGETS):
             ts = getattr(self.ts, 'val_loss_' + suff)
-            print 'suff', suff
-            print 'LEEEEEEEEEN', len(valid_losses[suff])
+            # print 'STUFF: ', suff
+            # print 'LEN: ', len(valid_losses[suff])
             ts.add(np.mean(valid_losses[suff]))
-            print 'top5 accuracy', np.mean(valid_top5_acc[suff])
-
-        losses_list = sorted(losses_list, key=lambda b: b.loss)
-        for b in losses_list:
-            print b.loss, b.recipe.name
 
         self.ts.valid_epoch_time_minutes.add(elapsed_time_mins(epoch_timer))
         valid_submit_file.close()

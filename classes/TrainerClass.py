@@ -1,6 +1,7 @@
 import argparse
 import sys
 import re
+import os
 import numpy as np
 import copy
 import time
@@ -56,7 +57,7 @@ def elapsed_time_ms(timer):
 
 
 def elapsed_time_mins(timer):
-    return (time.time() - timer) / 60
+    return (time.time() - timer) / 60.
 
 
 # This has to be picklable
@@ -142,7 +143,7 @@ class LogTimeseriesObserver(object):
         if ts.size() % self.add_freq == 0 and ts.size():
             xx = x
             yy = self.fun(ts.last_n(self.add_freq))
-            print 'LogTimerseries {name} x={x}, y={y}'.format(name=self.name,
+            print 'LogTimerseries {name} times={x}, y={y}'.format(name=self.name,
                                                               x=xx, y=yy)
 
 
@@ -308,7 +309,7 @@ class MultiprocessingChunkProcessor(object):
                 if res is not None:
                     yield res
 
-        print(100 * 'MultiprocessingChunkProcessor_end')
+        print('MultiprocessingChunkProcessor_end')
         res = self.output_director.handle_end()
         if res is not None:
             yield res
@@ -470,6 +471,7 @@ class BaseTrainer(object):
         parser.add_argument('--do-dump', type=int, default=1, help='TODO')
 
         # CNN learning related
+        parser.add_argument('--load-arch-path', type=str, default=None, help='TODO')
         parser.add_argument('--n-classes', type=int, default=2, help='TODO')
         parser.add_argument('--loss-freq', type=int, default=1, help='TODO')
         parser.add_argument('--monitor-freq', type=int, default=9999999, help='TODO')
@@ -620,6 +622,7 @@ class BaseTrainer(object):
         parser = argparse.ArgumentParser(description='TODO', fromfile_prefix_chars='@')
         parser.add_argument('--exp-dir-url', type=str, default=None, help='TODO')
         parser.add_argument('--exp-parent-dir-url', type=str, default=None, help='TODO')
+        parser.add_argument('--load-arch-path', type=str, default=None, help='TODO')
         return parser
 
     def transform_urls_to_paths(self, args):
@@ -716,7 +719,7 @@ class BaseTrainer(object):
         for figure_title, l in figures_schema.iteritems():
 
             for idx, (ts_name, line_name, mean_freq) in enumerate(l):
-                observer = LogTimeseriesObserver(name=ts_name + ':' + line_name, add_freq=mean_freq)
+                observer = LogTimeseriesObserver(name=ts_name + ': ', add_freq=mean_freq)
                 getattr(ts, ts_name).add_add_observer(observer)
 
         return ts
@@ -785,7 +788,7 @@ class BaseTrainer(object):
                 else:
                     ryj_conn_idx = -2
 
-                filename = 'img_{mb_idx}_{name}'.format(mb_idx=mb_idx, name=name) + path_suffix + '.jpg'
+                filename = 'img_{mb_idx}_{name}'.format(mb_idx=mb_idx, name=name) + path_suffix
                 path = self.saver.get_path('imgs', filename)
 
                 print 'show_images: saving to ', path
@@ -796,12 +799,13 @@ class BaseTrainer(object):
 
     def main(self, *args, **kwargs):
         parser = self.create_parser()
-        control_parser = self.create_control_parser(default_owner='a')
+        control_parser = self.create_control_parser(default_owner='diwu')
         control_args, prog_argv = control_parser.parse_known_args(sys.argv[1:])
         control_args = self.transform_urls_to_paths(control_args)
         prog_args = self.transform_urls_to_paths(parser.parse_args(prog_argv))
 
         print vars(control_args)
+        prog_args.load_arch_path = control_args.load_arch_path
         if control_args.exp_dir_path:
             exp_dir_path = control_args.exp_dir_path
         else:

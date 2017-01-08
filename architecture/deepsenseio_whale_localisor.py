@@ -8,7 +8,7 @@ from keras.models import Model
 
 
 def create_model(image_size=(224, 224), n_outs=None, dropout=False, dropout_coeff=0.5,
-                 fc_l2_reg=None, conv_l2_reg=None, glr_decay=0.9955,
+                 fc_l2_reg=None, conv_l2_reg=None, glr_decay=1.0,
                  momentum=0.9, glr=0.01, **kwargs):
     # this model is followed after the model from deepsenseio:
     # https://deepsense.io/deep-learning-right-whale-recognition-kaggle/
