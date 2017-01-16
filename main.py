@@ -2,6 +2,7 @@
 This is the main file
 """
 import sys
+
 from classes.FishClass import FishClass
 
 if __name__ == '__main__':

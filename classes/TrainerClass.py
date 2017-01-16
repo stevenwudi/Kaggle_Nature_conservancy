@@ -18,9 +18,11 @@ from multiprocessing import Process
 import traceback
 from Queue import Empty
 from classes.SaverClass import load_obj
-from classes.DataLoaderClass import floatX
+from classes.DataLoaderClass import floatX, fetch_path_local
 from bson import Binary
 import cPickle
+import scipy
+from collections import defaultdict
 
 
 def epoch_header(epoch_idx):
@@ -625,81 +627,6 @@ class BaseTrainer(object):
                     raise RuntimeError()
 
         return mean, std
-
-    def collect_training_validation_stats(self):
-        from distutils.dir_util import copy_tree
-        import scipy
-        # for every training images, we collect tagged fish with 4 negative background images
-        # that does not overlap with any tagged images
-        train_dir = os.path.join(self.exp_dir_path, 'train_binary')
-        valid_dir = os.path.join(self.exp_dir_path, 'valid_binary')
-        if not os.path.exists(train_dir):
-            os.mkdir(train_dir)
-        if not os.path.exists(valid_dir):
-            os.mkdir(valid_dir)
-        # we create another folder to collect all positive fish images, it's simply redundant, but makes the keras
-        # interface much easier to implement....
-        if not os.path.exists(os.path.join(train_dir, 'ALL')):
-            os.mkdir(os.path.join(train_dir, 'ALL'))
-        if not os.path.exists(os.path.join(valid_dir, 'ALL')):
-            os.mkdir(os.path.join(valid_dir, 'ALL'))
-        if not os.path.exists(os.path.join(train_dir, 'BACKGROUND')):
-            os.mkdir(os.path.join(train_dir, 'BACKGROUND'))
-        if not os.path.exists(os.path.join(valid_dir, 'BACKGROUND')):
-            os.mkdir(os.path.join(valid_dir, 'BACKGROUND'))
-
-        dir_list_name = self.strclass_to_class_idx.keys()
-
-        h = classes.DataLoaderClass.my_portable_hash([os.listdir(os.path.join(train_dir, 'ALL')), os.listdir(os.path.join(train_dir, 'BACKGROUND'))])
-        name = 'mean_shape_{}'.format(h)
-        print 'mean_shape_ filename', name
-        res = self.global_saver.load_obj(name)
-        if res is None or self.args.invalid_cache:
-            print '..recomputing mean, shape'
-
-            # copy subdirectory example
-            toDirectory = os.path.join(train_dir, 'ALL')
-            for k in dir_list_name:
-                fromDirectory = os.path.join(self.exp_dir_path, 'train', k)
-                copy_tree(fromDirectory, toDirectory)
-
-            # copy background
-            fromDirectory = os.path.join(self.exp_dir_path, 'train', 'BACKGROUND')
-            toDirectory = os.path.join(train_dir, 'BACKGROUND')
-            copy_tree(fromDirectory, toDirectory)
-
-            toDirectory = os.path.join(valid_dir, 'ALL')
-            for k in dir_list_name:
-                fromDirectory = os.path.join(self.exp_dir_path, 'valid', k)
-                copy_tree(fromDirectory, toDirectory)
-
-            # copy background
-            fromDirectory = os.path.join(self.exp_dir_path, 'valid', 'BACKGROUND')
-            toDirectory = os.path.join(valid_dir, 'BACKGROUND')
-            copy_tree(fromDirectory, toDirectory)
-
-            img_shap_list = []
-            train_mean = np.array([0, 0, 0], dtype=np.float32)
-            total_img_num = len(os.listdir(os.path.join(train_dir, 'ALL'))) + len(os.listdir(os.path.join(train_dir, 'BACKGROUND')))
-
-            for im_name in os.listdir(os.path.join(train_dir, 'ALL')):
-                img = scipy.misc.imread(os.path.join(train_dir, 'ALL', im_name))
-                img_shap_list.append(img.shape[:2])
-                train_mean += img.mean(axis=0).mean(axis=0) / total_img_num
-
-            for im_name in os.listdir(os.path.join(train_dir, 'BACKGROUND')):
-                img = scipy.misc.imread(os.path.join(train_dir, 'BACKGROUND', im_name))
-                img_shap_list.append(img.shape[:2])
-                train_mean += img.mean(axis=0).mean(axis=0) / total_img_num
-
-            # average shape is 149 * 211 -- we can save it's a square of 180
-            img_shape_mean = int(np.asarray(img_shap_list).mean())
-
-            print('train_mean: '+str(train_mean)+' img_shape_mean: '+str(img_shape_mean))
-            mean_data_path = self.global_saver.save_obj((train_mean, img_shape_mean), name)
-            self.exp.set_mean_data_url(mean_data_path)
-
-        return 1
 
     def create_control_parser(self, default_owner):
         parser = argparse.ArgumentParser(description='TODO', fromfile_prefix_chars='@')
