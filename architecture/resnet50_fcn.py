@@ -64,9 +64,9 @@ def get_model_resent50_fcn_retrain(final_conv_area=2, n_out=2, image_size = (200
     if average_pool:
         model.add(
             AveragePooling2D((average_pool, average_pool), name='avg_pool', input_shape=base_model.output_shape[1:]))
-    else:
-        # because originally we define the network as a average pooling
-        model.add(MyScaleLayer(1/3.))  ## THIS METHOD WILL NOT WORK!!!!!!!!!!!!!!!!!!!
+    # else:
+    #     # because originally we define the network as a average pooling
+    #     model.add(MyScaleLayer(1/3.))  ## THIS METHOD WILL NOT WORK!!!!!!!!!!!!!!!!!!!
     model.add(top_model)
     print('FINAL Model loaded...............')
 
