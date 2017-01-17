@@ -99,7 +99,7 @@ dense_weights = old_top_model.layers[-1].weights[0].get_value()
 print(dense_weights.shape)
 # build a classifier model to put on top of the convolutional model
 top_model = Sequential()
-top_model.add(Convolution2D(2, 5, 5, activation='sigmoid', border_mode='valid', input_shape=(512, None, None)))
+top_model.add(Convolution2D(2, 5, 5, activation='relu', border_mode='valid', input_shape=(512, None, None)))
 new_conv_shape = top_model.layers[0].weights[0].get_value().shape
 print(new_conv_shape)
 new_conv_weights = dense_weights.transpose(1,0).reshape(new_conv_shape)[:,:,::-1,::-1]
@@ -114,29 +114,23 @@ print('TOP convolutional parameters loaded...............')
 # add the model on top of the convolutional base
 model.add(top_model)
 
-## now we test our fully convolutional network
-# case 1
+# now we test our fully convolutional network
 from keras.preprocessing.image import ImageDataGenerator, img_to_array, load_img
-test_datagen = ImageDataGenerator(rescale=1., featurewise_center=True)
-test_datagen.mean = np.array(obj[0], dtype=np.float32).reshape(3, 1, 1)  # (rescale=1./255)
-test_generator = test_datagen.flow_from_directory(
-        directory='/home/stevenwudi/Documents/Python_Project/Kaggle_The_Nature_Conversancy_Fisheries_Monitoring/test_stg1',
-        batch_size=32,
-        class_mode='categorical')
-
 from matplotlib import pyplot as plt
 import scipy
 test_directory = '/home/stevenwudi/Documents/Python_Project/Kaggle_The_Nature_Conversancy_Fisheries_Monitoring/test_stg1'
 img_list = os.listdir(test_directory)
 
-for im_num in range(10, 11):
+for im_num in range(10):
     img = load_img(os.path.join(test_directory, img_list[im_num]))  # this is a PIL image
     img_origin = img.copy()
     total_scale = 5
     scale_prop = 1.1
     scale_list = [scale_prop**(x-2) for x in range(total_scale)]
-    ax = plt.figure(1)
+    ax = plt.figure(2)
     plt.clf()
+    figManager = plt.get_current_fig_manager()
+    figManager.window.showMaximized()
     # we sample 4 times different scale
     out_list = []
     for i in range(total_scale):
@@ -144,7 +138,7 @@ for im_num in range(10, 11):
         hsize = int((float(img_origin.size[1]) * scale_list[i]))
         img = img.resize((basewidth, hsize))
         x = img_to_array(img)  #
-        print("test image is of shape: "+str(x.shape))#  this is a Numpy array with shape (3, 150, 150)
+        print("test image is of shape: "+str(x.shape))  #this is a Numpy array with shape (3, 150, 150)
         x = x.reshape((1,) + x.shape)
         x_new = x - obj[0][None, :,  None, None]
 
@@ -153,23 +147,87 @@ for im_num in range(10, 11):
         out_list.append(out[0,0,:,])
 
         # visualise the fish detection result
-        plt.subplot(total_scale+1, 2, i*2+1)
-        plt.imshow(x[0].transpose(1,2,0) /255.)
-        plt.subplot(total_scale+1, 2, i*2+2)
-        plt.imshow(out[0,0,:,])
-        plt.colorbar()
+        # plt.subplot(total_scale+1, 2, i*2+1)
+        # plt.imshow(x[0].transpose(1,2,0) /255.)
+        # plt.subplot(total_scale+1, 2, i*2+2)
+        # plt.imshow(out[0,0,:,])
+        # plt.colorbar()
     # we average the ouput
     out_shape =out_list[0].shape
 
     resize_shape = [x-32*4 for x in img_origin.size[::-1]]
     out_mean = np.mean(np.asarray([scipy.misc.imresize(x, resize_shape) for x in out_list]), axis=0)
     max_row, max_col = np.unravel_index(np.argmax(out_mean), out_mean.shape)
-    plt.subplot(total_scale+1, 2, i*2+3)
+    plt.subplot(1, 2, 1)
     plt.imshow(img_origin)
-    plt.Circle((max_row, max_col), 0.5, color='r')
+    plt.scatter(x=[max_col+2*32+16], y=[max_row+2*32+16], c='r', s=20)
+    row_add = int(32*(img_origin.size[::-1][0]/32. - int(img_origin.size[::-1][0]/32)))
+    col_add = int(32*(img_origin.size[::-1][1]/32. - int(img_origin.size[::-1][1]/32)))
+    plt.scatter(x=[max_col+2*32+row_add], y=[max_row+2*32+col_add], c='b', s=20)
+
     plt.title('maximum row and col are: %d, %d' %(max_row+2*32+16, max_col+2*32+16))
-    plt.subplot(total_scale+1, 2, i*2+4)
+    plt.subplot(1, 2, 2)
     plt.imshow(out_mean * 1.0/out_mean.max())
     plt.colorbar()
     plt.draw()
-    plt.waitforbuttonpress()
+    plt.waitforbuttonpress(0.1)
+    plt.savefig('../exp_dir/fish_localise/imgs/vgg_fish_detection/'+img_list[im_num], bbox_inches='tight')
+
+
+print('Finish visualising')
+
+
+alb_directory = '/home/stevenwudi/Documents/Python_Project/Kaggle_The_Nature_Conversancy_Fisheries_Monitoring/train/ALB'
+img_list = os.listdir(alb_directory)
+
+for im_num in range(len(alb_directory)):
+    img = load_img(os.path.join(alb_directory, img_list[im_num]))  # this is a PIL image
+    img_origin = img.copy()
+    total_scale = 5
+    scale_prop = 1.1
+    scale_list = [scale_prop**(x-2) for x in range(total_scale)]
+    ax = plt.figure(2)
+    plt.clf()
+    figManager = plt.get_current_fig_manager()
+    figManager.window.showMaximized()
+    # we sample 4 times different scale
+    out_list = []
+    for i in range(total_scale):
+        basewidth = int(float(img_origin.size[0]) * scale_list[i])
+        hsize = int((float(img_origin.size[1]) * scale_list[i]))
+        img = img.resize((basewidth, hsize))
+        x = img_to_array(img)  #
+        print("test image is of shape: "+str(x.shape))  #this is a Numpy array with shape (3, 150, 150)
+        x = x.reshape((1,) + x.shape)
+        x_new = x - obj[0][None, :,  None, None]
+
+        # predict the model output
+        out = model.predict(x_new)
+        out_list.append(out[0,0,:,])
+
+        # visualise the fish detection result
+        # plt.subplot(total_scale+1, 2, i*2+1)
+        # plt.imshow(x[0].transpose(1,2,0) /255.)
+        # plt.subplot(total_scale+1, 2, i*2+2)
+        # plt.imshow(out[0,0,:,])
+        # plt.colorbar()
+    # we average the ouput
+    out_shape =out_list[0].shape
+
+    resize_shape = [x-32*4 for x in img_origin.size[::-1]]
+    out_mean = np.mean(np.asarray([scipy.misc.imresize(x, resize_shape) for x in out_list]), axis=0)
+    max_row, max_col = np.unravel_index(np.argmax(out_mean), out_mean.shape)
+    plt.subplot(1, 2, 1)
+    plt.imshow(img_origin)
+    plt.scatter(x=[max_col+2*32+16], y=[max_row+2*32+16], c='r', s=20)
+    row_add = int(32*(img_origin.size[::-1][0]/32. - int(img_origin.size[::-1][0]/32)))
+    col_add = int(32*(img_origin.size[::-1][1]/32. - int(img_origin.size[::-1][1]/32)))
+    plt.scatter(x=[max_col+2*32+row_add], y=[max_row+2*32+col_add], c='b', s=20)
+
+    plt.title('maximum row and col are: %d, %d' %(max_row+2*32+16, max_col+2*32+16))
+    plt.subplot(1, 2, 2)
+    plt.imshow(out_mean * 1.0/out_mean.max())
+    plt.colorbar()
+    plt.draw()
+    plt.waitforbuttonpress(0.1)
+    plt.savefig('../exp_dir/fish_localise/imgs/vgg_fish_detect_train/'+img_list[im_num], bbox_inches='tight')
