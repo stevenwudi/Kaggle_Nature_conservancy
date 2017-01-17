@@ -12,6 +12,7 @@ from keras.layers import Activation, Dropout, Flatten, Dense
 from keras.applications.vgg19 import VGG19
 from keras.models import Model
 from keras.utils import np_utils
+from keras.applications.vgg16 import preprocess_input
 
 import pickle
 from classes.DataLoaderClass import my_portable_hash

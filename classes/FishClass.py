@@ -731,6 +731,9 @@ class FishClass(BaseTrainer):
 
         return 1
 
+    def collect_training_validation_images_hard_mining(self):
+        pass
+
     def create_recipes_old(self, valid_seed, train_part=0.9):
         rng = random.Random()
         rng.seed(valid_seed)
@@ -905,6 +908,9 @@ class FishClass(BaseTrainer):
                 print('Finish collecting images.')
             if self.args.collect_training_validation_stats > 0:
                 flag = self.collect_training_validation_stats()
+                return flag
+            if self.args.collect_training_validation_stats > 0:
+                flag = self.collect_training_validation_images_hard_mining()
                 return flag
 
             if self.args.show_images > 0:
