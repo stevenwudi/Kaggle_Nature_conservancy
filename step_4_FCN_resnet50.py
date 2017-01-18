@@ -64,6 +64,7 @@ if False:
         plt.savefig('../exp_dir/fish_localise/imgs/resnet50_fish_detect_train/'+img_list[im_num], bbox_inches='tight')
 ###############################################3
 test_directory = '/home/stevenwudi/Documents/Python_Project/Kaggle_The_Nature_Conversancy_Fisheries_Monitoring/test_stg1'
+#test_directory = '/home/stevenwudi/Documents/Python_Project/Kaggle_The_Nature_Conversancy_Fisheries_Monitoring/test_pesudo'
 img_list = os.listdir(test_directory)
 
 #for im_num in range(len(img_list[5:30])):
@@ -72,9 +73,9 @@ for im_num in range(len(img_list)):
     print("test image: "+img_list[im_num])
     img = load_img(os.path.join(test_directory, img_list[im_num]))  # this is a PIL image
     img_origin = img.copy()
-    total_scale = 7
+    total_scale = 5
     scale_prop = 1.2
-    scale_list = [scale_prop**(x-2) for x in range(total_scale)]
+    scale_list = [scale_prop**(x) for x in range(total_scale)]
     # we sample 4 times different scale
     out_list = []
     for i in range(total_scale):
@@ -100,9 +101,8 @@ for im_num in range(len(img_list)):
     # we average the ouput
     max_list = [np.max(x) for x in out_list]
     resize_shape = [x for x in img_origin.size[::-1]]
-    #out_mean = np.mean(np.asarray([scipy.misc.imresize(x, resize_shape)* m for x, m in zip(out_list, max_list)]), axis=0)
-    out_mean = np.mean(np.asarray([scipy.misc.imresize(x, resize_shape) for x in out_list]), axis=0)
-
+    out_mean = np.mean(np.asarray([scipy.misc.imresize(x, resize_shape)* m for x, m in zip(out_list, max_list)]), axis=0)
+    #out_mean = np.mean(np.asarray([scipy.misc.imresize(x, resize_shape) for x in out_list]), axis=0)
     max_row, max_col = np.unravel_index(np.argmax(out_mean), out_mean.shape)
     if softmax_flag:
         ax = plt.figure(2)
@@ -115,7 +115,7 @@ for im_num in range(len(img_list)):
     plt.subplot(1, 2, 1)
     plt.imshow(img_origin)
     plt.scatter(x=[max_col], y=[max_row], c='r', s=30)
-    plt.title('maximum row and col are: %d, %d' %(max_row, max_col))
+    plt.title('scale response is: ' + str(['{:.3f}'.format(i) for i in max_list]))
 
     plt.subplot(1, 2, 2)
     if softmax_flag:
@@ -127,10 +127,10 @@ for im_num in range(len(img_list)):
         plt.colorbar(ticks=np.linspace(0, 1.0, 10, endpoint=True))
     else:
         im = plt.imshow(out_mean * 1.0 / out_mean.max())
-    # because out_list[2] is the original size in the above definition.
-    # we used the activation for an indication of the existence of the fish
-    plt.title('resnet maximum response is %.2f' % (out_list[2].max()))
+        # because out_list[2] is the original size in the above definition.
+        # we used the activation for an indication of the existence of the fish
 
+    #plt.title('resnet oringial size maximum response is %.2f' % (out_list[len(out_list)/2].max()))
     plt.draw()
     plt.waitforbuttonpress(1)
     if softmax_flag:
