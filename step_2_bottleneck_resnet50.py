@@ -16,8 +16,7 @@ import pickle
 from classes.DataLoaderClass import my_portable_hash
 
 # path to the model weights file.
-exp_dir_path = '../exp_dir/fish_localise'
-top_model_weights_path = os.path.join(exp_dir_path, 'training', 'bottleneck_fc_model_resnet50.h5')
+exp_dir_path = './exp_dir/fish_localise'
 # dimensions of our images.
 img_width, img_height = 200, 200
 
@@ -71,7 +70,41 @@ def save_bottlebeck_features():
     np.save(open(os.path.join(exp_dir_path, 'training', 'bottleneck_features_validation_resnet50.npy'), 'w'), bottleneck_features_validation)
 
 
+def save_bottlebeck_features_no_pooling():
+    # Ideally we want use original VGG image prepossessing mean and no scale
+    datagen = ImageDataGenerator(rescale=1., featurewise_center=True)  # (rescale=1./255)
+    datagen.mean = np.array(resnet50_data_mean, dtype=np.float32).reshape(3, 1, 1)
+
+    base_model = ResNet50(include_top=False, weights='imagenet', input_shape=(3, img_width, img_height))
+    base_model_1 = Model(input=base_model.input, output=base_model.layers[-2].output)
+
+    # add the model on top of the convolutional base
+    extract_model = Sequential()
+    extract_model.add(base_model_1)
+
+    generator = datagen.flow_from_directory(
+            train_data_dir,
+            target_size=(img_width, img_height),
+            batch_size=32,
+            class_mode='binary',
+            shuffle=False)
+
+    bottleneck_features_train = extract_model.predict_generator(generator, nb_train_samples)
+    np.save(open(os.path.join(exp_dir_path, 'training', 'bottleneck_features_train_resnet50_no_pooling_180.npy'), 'w'), bottleneck_features_train)
+
+    generator = datagen.flow_from_directory(
+            validation_data_dir,
+            target_size=(img_width, img_height),
+            batch_size=32,
+            class_mode='binary',
+            shuffle=False)
+    bottleneck_features_validation = extract_model.predict_generator(generator, nb_validation_samples)
+    np.save(open(os.path.join(exp_dir_path, 'training', 'bottleneck_features_validation_resnet50_no_pooling_180.npy'), 'w'), bottleneck_features_validation)
+
+
 def train_top_model():
+    top_model_weights_path = os.path.join(exp_dir_path, 'training', 'bottleneck_fc_model_resnet50.h5')
+
     train_data = np.load(open(os.path.join(exp_dir_path, 'training', 'bottleneck_features_train_resnet50.npy')))
 
     datagen = ImageDataGenerator(rescale=1., featurewise_center=True)  # (rescale=1./255)
@@ -112,9 +145,59 @@ def train_top_model():
     model.save_weights(top_model_weights_path)
     #model.save(top_model_weights_path)
 
-save_bottlebeck_features()
-train_top_model()
 
+def train_top_model_no_pooling():
+    top_model_weights_path = os.path.join(exp_dir_path, 'training', 'bottleneck_fc_model_resnet50_no_pooling.h5')
+
+    train_data = np.load(open(os.path.join(exp_dir_path, 'training', 'bottleneck_features_train_resnet50_no_pooling_180.npy')))
+
+    datagen = ImageDataGenerator(rescale=1., featurewise_center=True)  # (rescale=1./255)
+
+    generator = datagen.flow_from_directory(
+            train_data_dir,
+            target_size=(img_width, img_height),
+            batch_size=32,
+            class_mode='binary',
+            shuffle=False)
+
+    train_labels = np_utils.to_categorical(generator.classes, n_out)
+
+    generator = datagen.flow_from_directory(
+            validation_data_dir,
+            target_size=(img_width, img_height),
+            batch_size=32,
+            class_mode='binary',
+            shuffle=False)
+
+    validation_data = np.load(open(os.path.join(exp_dir_path, 'training', 'bottleneck_features_validation_resnet50_no_pooling_180.npy')))
+    validation_labels = np_utils.to_categorical(generator.classes, n_out)
+
+    model = Sequential()
+    model.add(Flatten(input_shape=train_data.shape[1:]))
+    model.add(Dense(n_out, activation='softmax'))
+
+    if False:
+        model.load_weights(top_model_weights_path)
+        model.compile(optimizer=optimizers.SGD(lr=1e-6, momentum=0.9), loss='binary_crossentropy', metrics=['accuracy'])
+    else:
+        model.compile(optimizer=optimizers.SGD(lr=1e-5, momentum=0.9), loss='binary_crossentropy', metrics=['accuracy'])
+        # RMSPROP simply doesn't work here for high dimensional data
+        #model.compile(optimizer='rmsprop', loss='binary_crossentropy', metrics=['accuracy'])
+
+    model.fit(train_data, train_labels,
+              nb_epoch=nb_epoch, batch_size=64,
+              validation_data=(validation_data, validation_labels))
+    # it's better to save the model...
+    model.save_weights(top_model_weights_path)
+    #model.save(top_model_weights_path)
+
+
+# save_bottlebeck_features
+# train_top_model()
+#save_bottlebeck_features_no_pooling()
+train_top_model_no_pooling()
+
+### Pooling result
 # RESNET50 val_loss is small than vgg!!!
 # Epoch 49/50
 # 32716/32716 [==============================] - 1s - loss: 1.1932e-07 - acc: 1.0000 - val_loss: 0.0521 - val_acc: 0.9947
@@ -127,3 +210,14 @@ train_top_model()
 # Epoch 50/50
 # 32716/32716 [==============================] - 1s - loss: 1.1921e-07 - acc: 1.0000 - val_loss: 0.0465 - val_acc: 0.9956
 
+
+
+# ############################### No average pooling, WOW, that's amazing good result #########################################
+# Epoch 97/100
+# 32716/32716 [==============================] - 6s - loss: 9.5839e-04 - acc: 1.0000 - val_loss: 0.0157 - val_acc: 0.9956
+# Epoch 98/100
+# 32716/32716 [==============================] - 6s - loss: 9.4898e-04 - acc: 1.0000 - val_loss: 0.0158 - val_acc: 0.9956
+# Epoch 99/100
+# 32716/32716 [==============================] - 6s - loss: 9.3896e-04 - acc: 1.0000 - val_loss: 0.0157 - val_acc: 0.9956
+# Epoch 100/100
+# 32716/32716 [==============================] - 6s - loss: 9.2947e-04 - acc: 1.0000 - val_loss: 0.0157 - val_acc: 0.9956

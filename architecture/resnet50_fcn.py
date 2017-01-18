@@ -22,7 +22,7 @@ class MyScaleLayer(Layer):
 
 
 def get_model_resent50_fcn_retrain(final_conv_area=2, n_out=2, image_size = (200, 200), average_pool=3,
-        weight_path='/home/stevenwudi/Documents/Python_Project/Kaggle_The_Nature_Conversancy_Fisheries_Monitoring/Kaggle_Nature_conservancy/exp_dir/fish_localise/training/fine_tune_all_conv_resnet50.h5'):
+        weight_path='./exp_dir/fish_localise/training/fine_tune_all_conv_resnet50.h5'):
     resn50 = ResNet50(include_top=False, weights='imagenet',  input_shape=(3, image_size[0], image_size[1]))
     base_model = Model(input=resn50.input, output=resn50.layers[-2].output)
 
@@ -76,7 +76,7 @@ def get_model_resent50_fcn_retrain(final_conv_area=2, n_out=2, image_size = (200
 def get_model_resnet50_fcn(average_pool=None,
               n_out=2,
               final_conv_area=2,
-              top_model_weights_path='../exp_dir/fish_localise/training/bottleneck_fc_model_resnet50.h5'):
+              top_model_weights_path='./exp_dir/fish_localise/training/bottleneck_fc_model_resnet50.h5'):
     """
     Transform the Resnet50 model to fully connected
     :param average_pool:
@@ -120,4 +120,52 @@ def get_model_resnet50_fcn(average_pool=None,
     model.add(top_model)
     print('TOP Model loaded...............')
 
+    return model
+
+
+def get_model_resnet50_fcn_no_pooling(n_out=2,
+              final_conv_area=7,
+              top_model_weights_path='./exp_dir/fish_localise/training/bottleneck_fc_model_resnet50_no_pooling.h5'):
+    """
+    Transform the Resnet50 model to fully connected
+    :param average_pool:
+    :param n_out:
+    :param final_conv_area:
+    :param top_model_weights_path:
+    :return:
+    """
+    resn50 = ResNet50(include_top=False, weights='imagenet', input_shape=(3, None, None))
+    base_model = Model(input=resn50.input, output=resn50.layers[-2].output)
+
+    print('RESNET50 Model loaded...............')
+    # build a classifier model to put on top of the convolutional model
+    old_top_model = Sequential()
+    old_top_model.add(Flatten(input_shape=(2048, final_conv_area, final_conv_area)))
+    old_top_model.add(Dense(n_out, activation='relu'))
+    old_top_model.load_weights(top_model_weights_path)
+    dense_weights = old_top_model.layers[-1].weights[0].get_value()
+    print(dense_weights.shape)
+    # add the model on top of the convolutional base
+    top_model = Sequential()
+    top_model.add(Convolution2D(2, final_conv_area, final_conv_area, activation='relu', border_mode='same', input_shape=(2048, None, None)))
+    new_conv_shape = top_model.layers[0].weights[0].get_value().shape
+    print(new_conv_shape)
+    #new_conv_weights = dense_weights.transpose(1,0).reshape(new_conv_shape)[:,:,::-1,::-1]
+    new_conv_weights = dense_weights.transpose(1,0).reshape((2, 2048, final_conv_area, final_conv_area))[:,:,::-1,::-1]
+    # set the value--> from dense to convolutional
+    # according to http://stackoverflow.com/questions/29958670/how-to-use-matlabs-imresize-in-python
+    top_model.layers[0].weights[0].set_value(new_conv_weights)
+    top_model.layers[0].weights[1].set_value(old_top_model.layers[-1].weights[1].get_value())
+
+    print('TOP convolutional parameters loaded...............')
+    model = Sequential()
+    model.add(base_model)
+    model.add(top_model)
+    print('TOP Model loaded...............')
+
+    return model
+
+
+def load_resnet50_model(model_path='./exp_dir/fish_localise/training/fish_detection_resnet50.h5'):
+    model = load_model(model_path)
     return model
