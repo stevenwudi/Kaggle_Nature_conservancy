@@ -233,7 +233,8 @@ def load_resnet50_model(model_path='./exp_dir/fish_localise/training/fcn_model_r
 
 
 def convert_resnet50_to_fcn_model(final_conv_area=7,
-                                  model_path='./exp_dir/fish_localise/training/fine_tune_model_resnet50.h5'):
+                                  model_path='./exp_dir/fish_localise/training/fine_tune_model_resnet50.h5',
+                                  save_mode_path='./exp_dir/fish_localise/training/fcn_model_resnet50.h5'):
     # last layer is fully connected model
     model = load_model(model_path)
     # build a new model
@@ -253,8 +254,8 @@ def convert_resnet50_to_fcn_model(final_conv_area=7,
     print(new_conv_weights.shape)
     model_new.layers[-1].weights[0].set_value(new_conv_weights)
     model_new.layers[-1].weights[1].set_value(model.layers[-1].weights[1].get_value())
-    model_new.save('./exp_dir/fish_localise/training/fcn_model_resnet50.h5')
-    print('FCN Model saved...............')
+    model_new.save(save_mode_path)
+    print('FCN Model saved as '+save_mode_path)
     return 1
 
 

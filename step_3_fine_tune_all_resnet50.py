@@ -1,8 +1,9 @@
 import os
 import numpy as np
 from keras import optimizers
+from keras.models import load_model
 from keras.preprocessing.image import ImageDataGenerator
-from architecture.resnet50_fcn import get_model_resnet50_fully_connected_no_pooling_retrain
+from architecture.resnet50_fcn import convert_resnet50_to_fcn_model
 
 exp_dir_path = './exp_dir/fish_localise'
 # dimensions of our images.
@@ -14,7 +15,9 @@ nb_train_samples = 4471+10350
 nb_epoch = 100
 resnet50_data_mean = [103.939, 116.779, 123.68]
 
-model = get_model_resnet50_fully_connected_no_pooling_retrain()
+
+model = load_model('./exp_dir/fish_localise/training/fine_tune_model_resnet50.h5')
+
 model.compile(loss='categorical_crossentropy',
               optimizer=optimizers.SGD(lr=1e-5, momentum=0.9),
               metrics=['accuracy'])
@@ -42,7 +45,11 @@ model.fit_generator(
     nb_epoch=nb_epoch,
     verbose=2)
 
-model.save_weights('./exp_dir/fish_localise/training/fish_detection_resnet50.h5')
+model_path = './exp_dir/fish_localise/training/fine_tune_model_resnet50_retrained.h5'
+save_mode_path = './exp_dir/fish_localise/training/fish_detection_resnet50_none_input.h5'
+model.save(model_path)
+convert_resnet50_to_fcn_model(final_conv_area=7, model_path=model_path,save_mode_path=save_mode_path)
+
 
 # Epoch 98/100
 # 579s - loss: 0.0756 - acc: 0.9911

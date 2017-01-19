@@ -443,15 +443,14 @@ class FishClass(BaseTrainer):
 
         self.args = args
         self.exp = exp
-        print 'ARGS', args
         self.n_classes = self.args.n_classes
         self.exp_dir_path = exp_dir_path
-        print ' '.join(sys.argv)
-        print args
+        print(' '.join(sys.argv))
+        print('ARGS', args)
         exp.set_name(self.args.name)
-
         # initialise the seeding process
         self.initialize()
+
         # set the model targets
         self.set_targets()
         self.ts = self.create_timeseries_and_figures()

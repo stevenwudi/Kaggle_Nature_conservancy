@@ -14,7 +14,8 @@ model = get_model_resnet50_fcn_no_pooling()
 
 total_scale = 7
 scale_prop = 1.1
-scale_list = [scale_prop ** (x) for x in range(total_scale)]
+minus_scale = total_scale/2
+scale_list = [scale_prop ** (x-minus_scale) for x in range(total_scale)]
 
 if False:
     alb_directory = '/home/stevenwudi/Documents/Python_Project/Kaggle_The_Nature_Conversancy_Fisheries_Monitoring/train/ALB'
@@ -91,6 +92,7 @@ for im_num in range(len(img_list)):
         x_new = x - np.asarray(resnet50_data_mean)[None, :,  None, None]
         # predict the model output
         out = model.predict(x_new)
+        print(out.shape)
         if softmax_flag:
             out = softmax(out)
         out_list.append(out[0, 0, :, :])
@@ -133,7 +135,7 @@ for im_num in range(len(img_list)):
         # because out_list[2] is the original size in the above definition.
         # we used the activation for an indication of the existence of the fish
 
-    plt.title('resnet oringial size maximum response is %.2f' % (out_list[0].max()))
+    plt.title("test image: "+img_list[im_num]+'. Resnet oringial size maximum response is %.2f' % (out_list[minus_scale].max()))
     #plt.title('resnet oringial size maximum response is %.2f' % (out_list[len(out_list)/2].max()))
     plt.draw()
     plt.waitforbuttonpress(1)
