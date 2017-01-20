@@ -15,21 +15,19 @@ import pickle
 from classes.DataLoaderClass import my_portable_hash
 
 # path to the model weights file.
-exp_dir_path = '../exp_dir/fish_localise'
+exp_dir_path = './exp_dir/fish_localise'
 top_model_weights_path = os.path.join(exp_dir_path, 'training', 'bottleneck_fc_model_resnet50.h5')
 # dimensions of our images.
 img_width, img_height = 180, 180
 
 train_data_dir = os.path.join(exp_dir_path, 'train_binary')
 validation_data_dir = os.path.join(exp_dir_path, 'valid_binary')
+train_data_dir_positive = os.path.join(exp_dir_path, 'train')
 nb_train_samples = 32716
 nb_validation_samples = 3615
 nb_epoch = 50
 n_out = 2
-
-h = my_portable_hash([os.listdir(os.path.join(exp_dir_path, 'train_binary', 'ALL')), os.listdir(os.path.join(exp_dir_path, 'train_binary', 'BACKGROUND'))])
-mean_shape_path = 'mean_shape_{}'.format(h)
-obj = pickle.load(open(os.path.join('../global/objs',mean_shape_path), 'rb'))
+resnet50_data_mean = [103.939, 116.779, 123.68]
 
 
 def hard_negative_mining():
@@ -38,7 +36,7 @@ def hard_negative_mining():
     train_data = np.load(open(os.path.join(exp_dir_path, 'training', 'bottleneck_features_train_resnet50.npy')))
 
     datagen = ImageDataGenerator(rescale=1., featurewise_center=True)  # (rescale=1./255)
-    datagen.mean = np.array(obj[0], dtype=np.float32).reshape(3, 1, 1)
+    datagen.mean = np.array(resnet50_data_mean, dtype=np.float32).reshape(3, 1, 1)
 
     train_generator = datagen.flow_from_directory(
         train_data_dir,
@@ -71,11 +69,7 @@ def hard_negative_mining():
 
     diff = np.sum(np.abs(validation_labels[idx_neg] - pred[idx_neg]), axis=1)
     neg_start_index = len(pred) - len(diff)
-    diff_sorted = sorted(diff, reverse=True)
     index = neg_start_index + np.asarray(sorted(range(len(diff)), key=lambda k: diff[k], reverse=True))
-
-    for idx in index[:10]:
-        print valid_generator.filenames[idx]
 
     # now we only include  half of the hard negatives from training data
     pred = model.predict(train_data)
@@ -83,11 +77,7 @@ def hard_negative_mining():
     idx_neg = (train_generator.classes == 1)
     diff = np.sum(np.abs(train_labels[idx_neg] - pred[idx_neg]), axis=1)
     neg_start_index = len(pred) - len(diff)
-    diff_sorted = sorted(diff, reverse=True)
     index = neg_start_index + np.asarray(sorted(range(len(diff)), key=lambda k: diff[k], reverse=True))
-
-    for idx in index[:10]:
-        print train_generator.filenames[idx]
 
     dir_hard_negative = os.path.join(exp_dir_path, 'train_hard_negatives')
     if not os.path.exists(dir_hard_negative):
@@ -108,11 +98,37 @@ def hard_negative_mining():
     fromDirectory = os.path.join(valid_generator.directory, 'BACKGROUND')
     copy_tree(fromDirectory, toDirectory)
     from shutil import copyfile
-    for idx in index[:len(index)/4]:
+    for idx in index[:len(index)/2]:
         src = os.path.join(train_generator.directory, train_generator.filenames[idx])
         dst = os.path.join(dir_hard_negative, train_generator.filenames[idx])
         copyfile(src, dst)
 
+    # but also, because we have an under-representative fish like Opah,
+    # for better fish detection, we need to scale them up accordingly.
+    # the less it has, the more we insert them
+    fish_num = []
+    fish_type = os.listdir(train_data_dir_positive)
+    for dir_pos in fish_type:
+        fish_num.append(len(os.listdir(os.path.join(train_data_dir_positive, dir_pos))))
+    # after check we have 4471 positive and 17520 background
+    # let's sample 3000 more fish? why not?
+    fish_num = np.asarray(fish_num)
+    acc_prob = np.add.accumulate(float(fish_num.max()) / fish_num)
+    acc_dict = {x: 0 for x in fish_type}
+    for rand_sample in np.random.rand(3000):
+        bucket = np.asarray(np.where(acc_prob> rand_sample*acc_prob.max())).min()
+        acc_dict[fish_type[bucket]] += 1
+        # we put this type of fish into the training for bootstrapping
+        # we randomly choose the replica of the image again...
+        file_number = np.random.randint(0, len(os.listdir(os.path.join(train_data_dir_positive, fish_type[bucket]))))
+        image_name = os.listdir(os.path.join(train_data_dir_positive, fish_type[bucket]))[file_number]
+        src = os.path.join(train_data_dir_positive, fish_type[bucket],image_name)
+        # we generate a random name for this replica
+        image_copy_name = fish_type[bucket] + image_name[:-4] + str(np.random.randint(0,1e10)) + image_name[-4:]
+        dst = os.path.join(dir_hard_negative, 'ALL', image_copy_name)
+        copyfile(src, dst)
+
+    print(acc_dict)
 
 hard_negative_mining()
 
