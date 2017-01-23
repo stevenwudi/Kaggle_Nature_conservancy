@@ -391,6 +391,7 @@ class BaseTrainer(object):
         parser.add_argument('--collect_training_validation_images', type=int, default=0, help='TODO')
         parser.add_argument('--collect_training_pos_neg_ratio', type=int, default=10, help='TODO')
         parser.add_argument('--collect_training_validation_stats', type=int, default=0, help='TODO')
+        parser.add_argument('--fish_redetection', type=int, default=0, help='TODO')
         parser.add_argument('--sloth-annotations-url', type=str, default=None, help='TODO')
         parser.add_argument('--auto-sloth-annotations-url', type=str, default=None, help='TODO')
         parser.add_argument('--auto-indygo-annotations-url', type=str, default=None, help='TODO')
@@ -477,7 +478,8 @@ class BaseTrainer(object):
         parser.add_argument('--do-dump', type=int, default=1, help='TODO')
 
         # CNN learning related
-        parser.add_argument('--load-arch-path', type=str, default=None, help='TODO')
+        parser.add_argument('--load_arch_path', type=str, default=None, help='TODO')
+        parser.add_argument('--init_model', type=int, default=0, help='TODO')
         parser.add_argument('--n-classes', type=int, default=2, help='TODO')
         parser.add_argument('--loss-freq', type=int, default=1, help='TODO')
         parser.add_argument('--monitor-freq', type=int, default=9999999, help='TODO')

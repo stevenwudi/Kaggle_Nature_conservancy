@@ -21,7 +21,15 @@ from classes.TrainerClass import ProcessFunc, MinibatchOutputDirector2, create_s
     EpochData, elapsed_time_ms, elapsed_time_mins
 import traceback
 from skimage.transform import warp, SimilarityTransform, AffineTransform
-from keras.preprocessing.image import ImageDataGenerator, load_img, img_to_array
+from keras.preprocessing.image import load_img, img_to_array
+
+from architecture.vgg_fcn import softmax
+from architecture.post_processing import generate_attention_map, generate_boundingbox_from_response_map, \
+    bb_intersection_over_union, printProgress
+
+from matplotlib import pyplot as plt
+from matplotlib import colors
+from matplotlib.patches import Rectangle
 
 
 def fetch_rob_crop_recipe(recipe, global_spec):
@@ -128,7 +136,6 @@ def fetch_rob_crop_recipe(recipe, global_spec):
             plt.imshow(img_warp)
             plt.title('transformed image')
 
-
             axes2 = plt.subplot(223)
             if r['flip']:
                 top_x = slot_2[0]
@@ -146,15 +153,16 @@ def fetch_rob_crop_recipe(recipe, global_spec):
 
             plt.rc('grid', linestyle="-", color='black')
             plt.grid(True)
-            plt.xticks([i*target_w/buckets for i in range(0,buckets)])
-            plt.yticks([i*target_h/buckets for i in range(0,buckets)])
+            plt.xticks([i * target_w / buckets for i in range(0, buckets)])
+            plt.yticks([i * target_h / buckets for i in range(0, buckets)])
 
-            ratio_bucket = 1.0* target_w/buckets
+            ratio_bucket = 1.0 * target_w / buckets
             if r['flip']:
                 points = [(slot_bucket2_x * ratio_bucket, slot_bucket1_y * ratio_bucket),
                           (slot_bucket1_x * ratio_bucket, slot_bucket2_y * ratio_bucket)]
             else:
-                points = [(slot_bucket1_x * ratio_bucket, slot_bucket1_y * ratio_bucket), (slot_bucket2_x * ratio_bucket,slot_bucket2_y * ratio_bucket)]
+                points = [(slot_bucket1_x * ratio_bucket, slot_bucket1_y * ratio_bucket),
+                          (slot_bucket2_x * ratio_bucket, slot_bucket2_y * ratio_bucket)]
             x = map(lambda x: x[0], points)
             y = map(lambda x: x[1], points)
             plt.scatter(x, y, color='r', s=20)
@@ -280,7 +288,6 @@ def vgg_keras_recipe(recipe, global_spec):
             plt.imshow(img_warp)
             plt.title('transformed image')
 
-
             axes2 = plt.subplot(223)
             if r['flip']:
                 top_x = slot_2[0]
@@ -298,15 +305,16 @@ def vgg_keras_recipe(recipe, global_spec):
 
             plt.rc('grid', linestyle="-", color='black')
             plt.grid(True)
-            plt.xticks([i*target_w/buckets for i in range(0,buckets)])
-            plt.yticks([i*target_h/buckets for i in range(0,buckets)])
+            plt.xticks([i * target_w / buckets for i in range(0, buckets)])
+            plt.yticks([i * target_h / buckets for i in range(0, buckets)])
 
-            ratio_bucket = 1.0* target_w/buckets
+            ratio_bucket = 1.0 * target_w / buckets
             if r['flip']:
                 points = [(slot_bucket2_x * ratio_bucket, slot_bucket1_y * ratio_bucket),
                           (slot_bucket1_x * ratio_bucket, slot_bucket2_y * ratio_bucket)]
             else:
-                points = [(slot_bucket1_x * ratio_bucket, slot_bucket1_y * ratio_bucket), (slot_bucket2_x * ratio_bucket,slot_bucket2_y * ratio_bucket)]
+                points = [(slot_bucket1_x * ratio_bucket, slot_bucket1_y * ratio_bucket),
+                          (slot_bucket2_x * ratio_bucket, slot_bucket2_y * ratio_bucket)]
             x = map(lambda x: x[0], points)
             y = map(lambda x: x[1], points)
             plt.scatter(x, y, color='r', s=20)
@@ -410,10 +418,10 @@ class FishClass(BaseTrainer):
 
     def init_model(self):
         if self.args.load_arch_path is not None:
-            print '..loading arch and model'
+            print('..loading arch and model')
             self.model = keras.models.load_model(self.args.load_arch_path)
             # this is a bad hack
-            self.model.optimizer.lr.set_value(0.1)
+            # self.model.optimizer.lr.set_value(0.1)
         else:
             params = {
                 'channels': self.args.channels,
@@ -431,13 +439,13 @@ class FishClass(BaseTrainer):
             print 'Set up new model'
             self.model = self.construct_model(self.args.arch, **params)
 
-        print 'Saving arch'
-        self.exp.set_nof_params(self.model.count_params())
-        self.exp.set_weights_desc(self.model.summary())
+            print 'Saving arch'
+            self.exp.set_nof_params(self.model.count_params())
+            self.exp.set_weights_desc(self.model.summary())
 
-        if self.args.load_params_path is not None:
-            print '..loading params', self.args.load_params_path
-            self.model.load_state_new(self.args.load_params_path)
+            if self.args.load_params_path is not None:
+                print '..loading params', self.args.load_params_path
+                self.model.load_state_new(self.args.load_params_path)
 
     def go(self, exp, args, exp_dir_path):
 
@@ -455,7 +463,7 @@ class FishClass(BaseTrainer):
         self.set_targets()
         self.ts = self.create_timeseries_and_figures()
         # initialise the model! Important step
-        if not self.args.collect_training_validation_images:
+        if self.args.init_model:
             self.init_model()
         self.process_recipe = getattr(classes.FishClass, self.args.process_recipe_name)
         self.do_training()
@@ -502,16 +510,16 @@ class FishClass(BaseTrainer):
             return count
 
         def clean_anno(l):
-            for i,el in enumerate(l):
+            for i, el in enumerate(l):
                 if 'filename' in el:
                     key = el['filename']
                 key = self.norm_name(self.norm_name(key))
-                l[i]['filename'] = key +'.jpg'
+                l[i]['filename'] = key + '.jpg'
             return l
 
         if self.args.sloth_annotations_url is not None:
             for fn, fld in enumerate(fish_folders):
-                json_path = os.path.join(self.args.sloth_annotations_url, fld.lower()+"_labels.json")
+                json_path = os.path.join(self.args.sloth_annotations_url, fld.lower() + "_labels.json")
                 sloth_annotations_list = json.load(open(json_path, 'r'))
                 count = f_annotation_largest(sloth_annotations_list, 'sloth', fld, fn)
                 print('loading class ' + fld + ', number of annotation is: ' + str(count))
@@ -576,7 +584,7 @@ class FishClass(BaseTrainer):
         count_all = 0
         if self.args.sloth_annotations_url is not None:
             for fn, fld in enumerate(self.strclass_to_class_idx.keys()):
-                json_path = os.path.join(self.args.sloth_annotations_url, fld.lower()+"_labels.json")
+                json_path = os.path.join(self.args.sloth_annotations_url, fld.lower() + "_labels.json")
                 sloth_annotations_list = json.load(open(json_path, 'r'))
                 count = f_annotation_all(sloth_annotations_list, fld)
                 count_all += count
@@ -600,6 +608,7 @@ class FishClass(BaseTrainer):
             dy = min(a.ymax, b.ymax) - max(a.ymin, b.ymin)
             if (dx >= 0) and (dy >= 0):
                 return dx * dy
+
         img = fetch_path_local(recipe.path)
         rect_list = []
         height_list = []
@@ -626,15 +635,16 @@ class FishClass(BaseTrainer):
         neg_rect_count = 0
         try_count = 0
 
-        while neg_rect_count <self.args.collect_training_pos_neg_ratio:
+        while neg_rect_count < self.args.collect_training_pos_neg_ratio:
             try_count += 1
-            if try_count>10000:
-                print("fail to generate negative example for image %s"%recipe.path)
+            if try_count > 10000:
+                print("fail to generate negative example for image %s" % recipe.path)
                 break
             # generate negative examples:
             # if the positive examples are very large...:
-            if int(height_mean)>int(img.shape[0] - height_mean) or int(width_mean)> int(img.shape[1] - width_mean):
-                print("fail to generate negative example for image %s because the positive image is too large."%recipe.path)
+            if int(height_mean) > int(img.shape[0] - height_mean) or int(width_mean) > int(img.shape[1] - width_mean):
+                print(
+                "fail to generate negative example for image %s because the positive image is too large." % recipe.path)
                 break
             xmin = rng.randint(int(height_mean), int(img.shape[0] - height_mean))
             ymin = rng.randint(int(width_mean), int(img.shape[1] - width_mean))
@@ -649,9 +659,11 @@ class FishClass(BaseTrainer):
             if overlap:
                 continue
             else:
-                img_background = img[int(rect_negative.xmin):int(rect_negative.xmax), int(rect_negative.ymin):int(rect_negative.ymax), :]
+                img_background = img[int(rect_negative.xmin):int(rect_negative.xmax),
+                                 int(rect_negative.ymin):int(rect_negative.ymax), :]
                 img_class = self.class_idx_to_strclass[recipe.annotations['fish_class']]
-                img_path_name = os.path.join(dir, 'BACKGROUND', img_class+"_"+recipe.name[:-4] + "_" + str(neg_rect_count) + '.jpg')
+                img_path_name = os.path.join(dir, 'BACKGROUND',
+                                             img_class + "_" + recipe.name[:-4] + "_" + str(neg_rect_count) + '.jpg')
                 scipy.misc.imsave(img_path_name, img_background)
                 neg_rect_count += 1
 
@@ -679,7 +691,8 @@ class FishClass(BaseTrainer):
 
         dir_list_name = self.strclass_to_class_idx.keys()
 
-        h = classes.DataLoaderClass.my_portable_hash([os.listdir(os.path.join(train_dir, 'ALL')), os.listdir(os.path.join(train_dir, 'BACKGROUND'))])
+        h = classes.DataLoaderClass.my_portable_hash(
+            [os.listdir(os.path.join(train_dir, 'ALL')), os.listdir(os.path.join(train_dir, 'BACKGROUND'))])
         name = 'mean_shape_{}'.format(h)
         print 'mean_shape_ filename', name
         res = self.global_saver.load_obj(name)
@@ -709,7 +722,8 @@ class FishClass(BaseTrainer):
 
             img_shap_list = []
             train_mean = np.array([0, 0, 0], dtype=np.float32)
-            total_img_num = len(os.listdir(os.path.join(train_dir, 'ALL'))) + len(os.listdir(os.path.join(train_dir, 'BACKGROUND')))
+            total_img_num = len(os.listdir(os.path.join(train_dir, 'ALL'))) + len(
+                os.listdir(os.path.join(train_dir, 'BACKGROUND')))
 
             for im_name in os.listdir(os.path.join(train_dir, 'ALL')):
                 img = scipy.misc.imread(os.path.join(train_dir, 'ALL', im_name))
@@ -724,14 +738,11 @@ class FishClass(BaseTrainer):
             # average shape is 149 * 211 -- we can save it's a square of 180
             img_shape_mean = int(np.asarray(img_shap_list).mean())
 
-            print('train_mean: '+str(train_mean)+' img_shape_mean: '+str(img_shape_mean))
+            print('train_mean: ' + str(train_mean) + ' img_shape_mean: ' + str(img_shape_mean))
             mean_data_path = self.global_saver.save_obj((train_mean, img_shape_mean), name)
             self.exp.set_mean_data_url(mean_data_path)
 
         return 1
-
-    def collect_training_validation_images_hard_mining(self):
-        pass
 
     def create_recipes_old(self, valid_seed, train_part=0.9):
         rng = random.Random()
@@ -763,7 +774,8 @@ class FishClass(BaseTrainer):
 
         print 'VALID EXAMPLES'
         print valid_recipes[0]
-        print('it should be name: img_03515.jpg because of the valid seed is 1000! Important!!!')
+        print('it should be name: img_04238.jpg because of the valid seed is 1000! Important!!!')
+        print('it should be name: img_04238.jpg because of the valid seed is 1000! Important!!!')
 
         return Bunch(train_recipes=train_recipes,
                      valid_recipes=valid_recipes,
@@ -843,7 +855,8 @@ class FishClass(BaseTrainer):
                 print 'Create iterator!!!! pool_size = ', pool_size
                 process_func = ProcessFunc(process_recipe, spec)
                 output_director = MinibatchOutputDirector2(mb_size,
-                                                           x_shape=(spec['target_channels'], spec['target_h'], spec['target_w']),
+                                                           x_shape=(
+                                                           spec['target_channels'], spec['target_h'], spec['target_w']),
                                                            y_shape=(Y_SHAPE,),
                                                            output_partial_batches=output_partial_batches)
 
@@ -884,130 +897,194 @@ class FishClass(BaseTrainer):
 
         return IteratorFactory()
 
+    def fish_redetection(self):
+
+        all_img_dir = os.path.join(self.exp_dir_path, 'imgs/resnet50_fish_detect_train')
+        response_img_dir = os.path.join(self.exp_dir_path, 'response_maps')
+        if not os.path.exists(response_img_dir):
+            os.mkdir(response_img_dir)
+        # some meta parameters
+        self.resnet50_data_mean = [103.939, 116.779, 123.68]
+        self.total_scale = 9
+        self.scale_prop = 1.1
+        self.scale_list = [self.scale_prop ** (x) for x in range(self.total_scale)]
+        self.color_norm = colors.Normalize(vmin=0, vmax=1)
+
+        time_list = []
+        iou_list = []
+        for i, recipe in enumerate(self.train_recipes):
+            time_start_batch = time.time()
+            iou_list.append(self.extract_salient_fish(recipe=recipe, all_img_dir=all_img_dir, response_img_dir=response_img_dir))
+            time_list.append(time.time() - time_start_batch)
+            eta = len(self.train_recipes) * np.array(time_list).mean()
+            printProgress(i, len(self.train_recipes+self.valid_recipes), prefix='Progress:',
+                          suffix='IOU error: %0.5f, ETA: %0.2f sec.' % (np.array(iou_list).mean(), eta),
+                          barLength=50)
+
+        for i, recipe in enumerate(self.valid_recipes):
+            self.extract_salient_fish(recipe=recipe, all_img_dir=all_img_dir, response_img_dir=response_img_dir)
+            time_start_batch = time.time()
+            iou_list.append(
+                self.extract_salient_fish(recipe=recipe, all_img_dir=all_img_dir, response_img_dir=response_img_dir))
+            time_list.append(time.time() - time_start_batch)
+            eta = len(self.valid_recipes) * np.array(time_list).mean()
+            printProgress(i, len(self.train_recipes+self.valid_recipes), prefix='Progress:',
+                          suffix='IOU: %0.5f, ETA: %0.2f sec.' % (np.array(iou_list).mean(), eta),
+                          barLength=50)
+
+        ### create a pseudo recipe for NoF class... and feed it into fish detection pipeline
+        return True
+
+    def extract_salient_fish(self, recipe,
+                             all_img_dir='imgs/resnet50_fish_detect_train',
+                             response_img_dir='response_maps'):
+        img = load_img(recipe.path)
+        img_origin = img.copy()
+        # we sample different scale
+        out_list = []
+        for i in range(self.total_scale):
+            basewidth = int(float(img_origin.size[0]) * self.scale_list[i])
+            hsize = int((float(img_origin.size[1]) * self.scale_list[i]))
+            img = img.resize((basewidth, hsize))
+            x = img_to_array(img)  #
+            #print("test image is of shape: " + str(x.shape))  # this is a Numpy array with shape (3, 150, 150)
+            x = x.reshape((1,) + x.shape)
+            x_new = x - np.asarray(self.resnet50_data_mean)[None, :, None, None]
+            # predict the model output
+            out = self.model.predict(x_new)
+            #print(out.shape)
+            out = softmax(out)
+            out_list.append(out[0, 0, :, :])
+
+        # ########################## visualise the fish detection result
+        # max_list store the maximum response for different scales
+        max_list = [np.max(x) for x in out_list]
+        resize_shape = [x for x in img_origin.size[::-1]]
+        resized_response = [scipy.misc.imresize(x, resize_shape) * m for x, m in zip(out_list, max_list)]
+        out_mean = np.mean(np.asarray(resized_response), axis=0)
+        max_row, max_col = np.unravel_index(np.argmax(out_mean), out_mean.shape)
+
+        # attention map add heuristic low confidence near the boundaries
+        attention_map = generate_attention_map(out_mean.shape)
+        out_mean_attention = np.multiply(attention_map, out_mean)
+        max_row_new, max_col_new = np.unravel_index(np.argmax(out_mean_attention), out_mean_attention.shape)
+
+        # now from the response map we generate the bounding box.
+        show_map, chosen_region, top, left, bottom, right = \
+            generate_boundingbox_from_response_map(out_mean_attention,
+                                                   max_row_new, max_col_new)
+
+        fusion_response = out_mean_attention[max_row_new, max_col_new] / 255.
+
+        rect_pred = Rectangle(
+            xy=(left, top),
+            width=right - left,
+            height=bottom - top,
+            facecolor='none',
+            edgecolor='r',
+        )
+
+        # We get the ground truth from the annotation using sloth
+        img = np.asarray(img_origin)
+        for i, anno in enumerate([self.annotations[recipe.name]['sloth']]):
+            # some annotations are outside the image
+            anno['x'] = min(max(0, anno['x']), img.shape[1])
+            anno['y'] = min(max(0, anno['y']), img.shape[0])
+            img_class = self.class_idx_to_strclass[recipe.annotations['fish_class']]
+            rect_gt = Rectangle(xy=(int(anno['x']), int(anno['y'])),
+                                width=int(anno['width']),
+                                height=int(anno['height']),
+                                facecolor='none',
+                                edgecolor='g')
+
+        # get the Intersection over Union (IoU)
+        iou = bb_intersection_over_union(rect_pred, rect_gt)
+
+        # visualisation
+        plt.clf()
+        plt.subplot(2, 3, 1)
+        im = plt.imshow(out_mean * 1.0 / 255)
+        im.set_norm(self.color_norm)
+        plt.title('Scale response:  ' +
+                  str(['{:.3f}'.format(i) for i in [l[max_row_new, max_col_new] / 255. for l in resized_response]]) +
+                  '.\n  Corresponding: ' + str(['{:.3f}'.format(i) for i in self.scale_list]))
+
+        plt.subplot(2, 3, 2)
+        im = plt.imshow(out_mean_attention * 1.0 / 255)
+        im.set_norm(self.color_norm)
+        # plt.colorbar(ticks=np.linspace(0, 1.0, 10, endpoint=True))
+        if fusion_response < 0.3:
+            plt.title('New maximum response is %.2f, NO FISH!!!' % (fusion_response))
+        else:
+            plt.title('New maximum response is %.2f' % (fusion_response))
+
+        rect_axes_1 = plt.subplot(2, 3, 3)
+        plt.imshow(img_origin)
+        plt.scatter(x=[max_col], y=[max_row], color='b', s=80, alpha=.5)
+        plt.scatter(x=[max_col_new], y=[max_row_new], color='r', s=30, marker='^', alpha=1)
+        rect_axes_1.add_patch(rect_pred)
+        rect_axes_1.add_patch(rect_gt)
+        rect_axes_1.text(rect_pred.xy[0], rect_pred.xy[1], 'IoU: %.3f'%(iou), fontsize=15, color='r')
+        plt.title("Red: pred, Green: gt. test image: " + recipe.name)
+
+        # plot rectangle acquisition process
+        plt.subplot(2, 3, 4)
+        plt.imshow(show_map)
+
+        plt.subplot(2, 3, 5)
+        plt.imshow(chosen_region)
+
+        plt.subplot(2, 3, 6)
+        plt.imshow(img[top:bottom, left:right, :])
+        plt.title("Annotated fish type: " + img_class)
+
+        # plt.draw()
+        # plt.waitforbuttonpress(1)
+
+        upper_dir = os.path.join(all_img_dir, img_class)
+        response_map_dir = os.path.join(response_img_dir, img_class)
+        if not os.path.exists(upper_dir):
+            os.mkdir(upper_dir)
+        if not os.path.exists(response_map_dir):
+            os.mkdir(response_map_dir)
+
+        plt.savefig(os.path.join(upper_dir, recipe.name), bbox_inches='tight')
+        # 	1. Save response map for IoU metadata optimization
+        np.save(os.path.join(response_map_dir, recipe.name+'.npy'), out_mean_attention)
+
+        #if iou < 0.1:
+            # there could be two possibilities
+            # (1) the prediction contains a fish but the biggest annotation doest not correspond to this detection
+            # (2) the prediction simply is not a fish, and we needs to put it back to the background category
+            # regardless we need to save it to a negative folder and then examin it manully
+        #print('Finish saving figure: '+os.path.join(upper_dir, recipe.name))
+        return iou
+
     def do_training(self):
         '''
         This is the main function for training
         :return:
         '''
         self.annotations = self.read_annotations()
-        # Finished: data loading and augmentation
-        print 'Params info before training'
         iterator_factory = self.create_iterator_factory()
         strclass_to_class_idx = iterator_factory.get_strclass_to_class_idx()
         self.strclass_to_class_idx = strclass_to_class_idx
 
         if self.args.no_train is False:
-            self.train_recipes, self.valid_recipes = unpack(self.create_recipes_old(valid_seed=self.valid_seed, train_part=self.args.train_part),
-                                                            'train_recipes', 'valid_recipes')
-            flag = 0
+            self.train_recipes, self.valid_recipes = unpack(
+                self.create_recipes_old(valid_seed=self.valid_seed, train_part=self.args.train_part),
+                'train_recipes', 'valid_recipes')
             if self.args.collect_training_validation_images > 0:
                 # we collect the training and the validation images and put them in the corresponding folders
                 # this is going to take a while
-                flag = self.collect_training_validation_images()
+                self.collect_training_validation_images()
                 print('Finish collecting images.')
             if self.args.collect_training_validation_stats > 0:
                 flag = self.collect_training_validation_stats()
                 return flag
-            if self.args.collect_training_validation_stats > 0:
-                flag = self.collect_training_validation_images_hard_mining()
+            if self.args.fish_redetection > 0:
+                flag = self.fish_redetection()
                 return flag
-
-            if self.args.show_images > 0:
-                show_images_spec = copy.copy(iterator_factory.TRAIN_SPEC)
-                show_images_iterator = iterator_factory.get_iterator(self.train_recipes, 10, show_images_spec)
-                self.show_images(show_images_iterator, self.args.show_images)
-
-            try:
-                epoch_params = {
-                    'best_valid': np.inf,
-                    'train_loss_list': [],
-                    'valid_loss_list': [],
-                    'early_stopping_count': 0,
-                    'lr_decrease_times_count': 0,
-                    'glr': np.float32(self.args.glr),
-                }
-                # start the epoch looping
-                for epoch_idx in xrange(self.args.n_epochs):
-                    random.shuffle(self.train_recipes)
-                    random.shuffle(self.valid_recipes)
-                    print epoch_header(epoch_idx)
-                    epoch_train_recipes = self.train_recipes
-                    random.shuffle(epoch_train_recipes)
-                    epoch_valid_recipes = self.valid_recipes
-
-                    n_train_batches = len(epoch_train_recipes) // self.args.mb_size
-                    n_valid_batches = len(epoch_valid_recipes) // self.args.mb_size
-                    # get the train iterator
-                    train_iterator = iterator_factory.get_train_iterator(epoch_train_recipes, self.args.mb_size,
-                                                                         pool_size=self.args.train_pool_size,
-                                                                         buffer_size=self.args.train_buffer_size)
-
-                    # We should delay creating the iterator because, it will start loading images
-                    for i in xrange(len(epoch_valid_recipes)):
-                        epoch_valid_recipes[i].idx = i
-
-                    to_add = (self.args.mb_size - len(epoch_valid_recipes) % self.args.mb_size) % self.args.mb_size
-                    if to_add and self.args.valid_partial_batches:
-                        epoch_valid_recipes_fixed = epoch_valid_recipes + to_add * [epoch_valid_recipes[0]]
-                    else:
-                        epoch_valid_recipes_fixed = epoch_valid_recipes
-                    # get the valid iterator
-                    valid_iterator = iterator_factory.get_valid_iterator(epoch_valid_recipes_fixed,
-                                                                         self.args.mb_size,
-                                                                         self.args.n_samples_valid,
-                                                                         pool_size=self.args.valid_pool_size,
-                                                                         real_valid_shuffle=self.args.real_valid_shuffle)
-                    # one_train_epoch
-                    print('n_train_batches %d, n_valid_batches; %d' % (n_train_batches, n_valid_batches))
-                    train_losses = unpack(self.do_train_epoch(epoch_params, train_iterator, self.model), 'train_losses')
-                    # one_valid_epoch
-                    valid_losses = self.do_valid_epoch(valid_iterator, self.model)
-
-                    # early stopping algorithm
-                    epoch_params['train_loss_list'].append(np.mean(train_losses))
-                    epoch_params['valid_loss_list'].append(np.mean(valid_losses))
-
-                    if epoch_params['best_valid'] > epoch_params['valid_loss_list'][-1]:
-                        epoch_params['early_stopping_count'] = 0
-                        print('saving best valid result...')
-                        epoch_params['best_valid'] = epoch_params['valid_loss_list'][-1]
-                        file_name = self.args.arch + '_best_valid_' + 'epoch_' + str(epoch_idx)
-                        model_path = os.path.join(self.exp_dir_path, 'training', file_name + '.h5')
-                        self.model.save(model_path)
-                    else:
-                        # we wait for early stopping loop until a certain time
-                        epoch_params['early_stopping_count'] += 1
-                        if epoch_params['early_stopping_count'] > self.args.early_stopping_wait:
-                            epoch_params['early_stopping_count'] = 0
-                            if epoch_params['lr_decrease_times_count'] < self.args.lr_decrease_times:
-                                epoch_params['lr_decrease_times_count'] += 1
-                                epoch_params['glr'] = self.model.optimizer.lr.get_value() * self.args.lr_decreass_coeff
-                                print('decreasing the learning rate to: %.5f' % epoch_params['glr'])
-                                self.model.optimizer.lr.set_value(np.float32(epoch_params['glr']))
-                            else:
-                                print('STOP THE LEARNING DUE TO EARLY STOPPING !!!')
-                                return 0
-
-                    epoch_data = EpochData(train_loss=np.mean(train_losses),
-                                           valid_loss=np.mean(valid_losses),
-                                           train_losses=train_losses,
-                                           valid_losses=valid_losses,
-                                           epoch_params=epoch_params)
-                    self.exp.add_epoch_data(epoch_data.encode())
-
-                    print 'Epoch', epoch_idx, 'train_losses', np.mean(train_losses), 'valid_losses', np.mean(valid_losses)
-                    for keys, values in epoch_params.items():
-                        if type(values) is list:
-                            print(keys, ":", values[-3:])
-                        else:
-                            print(keys, ':', values)
-
-            except KeyboardInterrupt as e:
-                print 'Early break.'
-
-            print '..Training ended.'
-        else:
-            print '..No Training!!'
 
     def do_train_epoch(self, epoch_params, train_iterator, model):
 
@@ -1021,7 +1098,7 @@ class FishClass(BaseTrainer):
         for mb_idx, item in enumerate(train_iterator):
             mb_x, mb_y = item['mb_x'], item['mb_y']
             load_time_per_example = float(elapsed_time_ms(load_timer)) / mb_size
-            #print 'load time per example', load_time_per_example
+            # print 'load time per example', load_time_per_example
             self.ts.train_per_example_load_time_ms.add(load_time_per_example)
 
             # if mb_idx % self.args.monitor_freq == 0 and mb_idx:
@@ -1032,7 +1109,7 @@ class FishClass(BaseTrainer):
             output = []
             idx_out = 0
             for _, n_out in self.TARGETS:
-                output.append(mb_y[:, idx_out:idx_out+n_out])
+                output.append(mb_y[:, idx_out:idx_out + n_out])
                 idx_out == n_out
 
             loss_batch = model.train_on_batch(mb_x, output)
@@ -1041,7 +1118,7 @@ class FishClass(BaseTrainer):
             self.ts.train_cost.add(loss_batch[0])
 
             for i, suff in enumerate(self.get_target_suffixes(self.TARGETS)):
-                loss = loss_batch[i+1]
+                loss = loss_batch[i + 1]
                 ts = getattr(self.ts, 'train_loss_' + suff)
                 ts.add(np.mean(loss))
                 train_losses.append(np.mean(loss))
@@ -1050,7 +1127,8 @@ class FishClass(BaseTrainer):
             #     self.exp.update_ping()
 
             load_timer = time.time()
-            rest_time_per_example = float(elapsed_time_ms(whole_batch_timer)) / mb_size - call_time_per_example - load_time_per_example
+            rest_time_per_example = float(
+                elapsed_time_ms(whole_batch_timer)) / mb_size - call_time_per_example - load_time_per_example
             self.ts.train_per_example_rest_time_ms.add(rest_time_per_example)
             whole_batch_timer = time.time()
 
@@ -1077,7 +1155,8 @@ class FishClass(BaseTrainer):
 
             for suff, interval in zip(self.get_target_suffixes(self.TARGETS), self.get_intervals(self.TARGETS)):
                 # valid_loss will be of dimension equals to # batch
-                valid_loss = -(mb_y[:, interval[0]:interval[1]] * np.log(np.finfo(np.float32).eps+p_y_given_x_all[:, interval[0]:interval[1]])).sum(axis=1)
+                valid_loss = -(mb_y[:, interval[0]:interval[1]] * np.log(
+                    np.finfo(np.float32).eps + p_y_given_x_all[:, interval[0]:interval[1]])).sum(axis=1)
                 valid_losses[suff].append(valid_loss)
 
         for suff in self.get_target_suffixes(self.TARGETS):

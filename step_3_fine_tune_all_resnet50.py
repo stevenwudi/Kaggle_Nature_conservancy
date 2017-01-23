@@ -11,7 +11,7 @@ image_size = (200, 200)
 # number of image scene classes
 n_out = 2
 train_data_dir = os.path.join(exp_dir_path, 'train_hard_negatives')
-nb_train_samples = 7471+17520
+nb_train_samples = 4471+3000+3000 + 17520
 nb_epoch = 100
 resnet50_data_mean = [103.939, 116.779, 123.68]
 
@@ -51,13 +51,6 @@ model.save(model_path)
 save_mode_path = './exp_dir/fish_localise/training/fish_detection_resnet50_none_input.h5'
 convert_resnet50_to_fcn_model(final_conv_area=7, model_path=model_path, save_mode_path=save_mode_path)
 
-
-# Epoch 98/100
-# 579s - loss: 0.0756 - acc: 0.9911
-# Epoch 99/100
-# 579s - loss: 0.0624 - acc: 0.9920
-# Epoch 100/100
-# 579s - loss: 0.0670 - acc: 0.9912
 
 # Epoch 48/50
 # 575s - loss: 0.0190 - acc: 0.9929
