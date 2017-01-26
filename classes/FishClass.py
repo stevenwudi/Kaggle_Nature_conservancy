@@ -17,8 +17,7 @@ import classes.DataLoaderClass
 from classes.DataLoaderClass import unpack, floatX, fetch_path_local, random_perturbation_transform, \
     build_center_uncenter_transforms2, transformation, find_bucket
 
-from classes.TrainerClass import ProcessFunc, MinibatchOutputDirector2, create_standard_iterator, repeat, epoch_header, \
-    EpochData, elapsed_time_ms, elapsed_time_mins
+from classes.TrainerClass import ProcessFunc, MinibatchOutputDirector2, create_standard_iterator, repeat, elapsed_time_ms, elapsed_time_mins
 import traceback
 from skimage.transform import warp, SimilarityTransform, AffineTransform
 from keras.preprocessing.image import load_img, img_to_array
@@ -420,6 +419,14 @@ class FishClass(BaseTrainer):
         if self.args.load_arch_path is not None:
             print('..loading arch and model')
             self.model = keras.models.load_model(self.args.load_arch_path)
+
+            # we load some metaparameters as well:
+            # some meta parameters
+            self.resnet50_data_mean = [103.939, 116.779, 123.68]
+            self.total_scale = 9
+            self.scale_prop = 1.1
+            self.scale_list = [self.scale_prop ** (x) for x in range(self.total_scale)]
+            self.color_norm = colors.Normalize(vmin=0, vmax=1)
             # this is a bad hack
             # self.model.optimizer.lr.set_value(0.1)
         else:
@@ -772,9 +779,8 @@ class FishClass(BaseTrainer):
         train_recipes = recipes[:split_point]
         valid_recipes = recipes[split_point:]
 
-        print 'VALID EXAMPLES'
-        print valid_recipes[0]
-        print('it should be name: img_04238.jpg because of the valid seed is 1000! Important!!!')
+        print('VALID EXAMPLES')
+        print(valid_recipes[0])
         print('it should be name: img_04238.jpg because of the valid seed is 1000! Important!!!')
 
         return Bunch(train_recipes=train_recipes,
@@ -903,22 +909,17 @@ class FishClass(BaseTrainer):
         response_img_dir = os.path.join(self.exp_dir_path, 'response_maps')
         if not os.path.exists(response_img_dir):
             os.mkdir(response_img_dir)
-        # some meta parameters
-        self.resnet50_data_mean = [103.939, 116.779, 123.68]
-        self.total_scale = 9
-        self.scale_prop = 1.1
-        self.scale_list = [self.scale_prop ** (x) for x in range(self.total_scale)]
-        self.color_norm = colors.Normalize(vmin=0, vmax=1)
 
         time_list = []
         iou_list = []
+
         for i, recipe in enumerate(self.train_recipes):
             time_start_batch = time.time()
             iou_list.append(self.extract_salient_fish(recipe=recipe, all_img_dir=all_img_dir, response_img_dir=response_img_dir))
             time_list.append(time.time() - time_start_batch)
-            eta = len(self.train_recipes) * np.array(time_list).mean()
+            eta = (len(self.train_recipes)-i) * np.array(time_list).mean()
             printProgress(i, len(self.train_recipes+self.valid_recipes), prefix='Progress:',
-                          suffix='IOU error: %0.5f, ETA: %0.2f sec.' % (np.array(iou_list).mean(), eta),
+                          suffix='IOU error: %0.5f, ETA train: %0.2f sec.' % (np.array(iou_list).mean(), eta),
                           barLength=50)
 
         for i, recipe in enumerate(self.valid_recipes):
@@ -927,12 +928,31 @@ class FishClass(BaseTrainer):
             iou_list.append(
                 self.extract_salient_fish(recipe=recipe, all_img_dir=all_img_dir, response_img_dir=response_img_dir))
             time_list.append(time.time() - time_start_batch)
-            eta = len(self.valid_recipes) * np.array(time_list).mean()
+            eta = (len(self.valid_recipes)-i) * np.array(time_list).mean()
             printProgress(i, len(self.train_recipes+self.valid_recipes), prefix='Progress:',
-                          suffix='IOU: %0.5f, ETA: %0.2f sec.' % (np.array(iou_list).mean(), eta),
+                          suffix='IOU: %0.5f, ETA valid: %0.2f sec.' % (np.array(iou_list).mean(), eta),
                           barLength=50)
 
-        ### create a pseudo recipe for NoF class... and feed it into fish detection pipeline
+        # create a pseudo recipe for NoF class... and feed it into fish detection pipeline
+        nof_recipe = []
+        for fish_id in os.listdir(os.path.join(self.args.train_dir_path, 'NoF')):
+            recipe = Bunch(name=fish_id,
+                           path=os.path.join(self.args.train_dir_path, 'NoF', fish_id),
+                           img_class='Nof',
+                           class_idx=7)
+            nof_recipe.append(recipe)
+
+        for i, recipe in enumerate(nof_recipe):
+            self.extract_salient_fish(recipe=recipe, all_img_dir=all_img_dir, response_img_dir=response_img_dir)
+            time_start_batch = time.time()
+            iou_list.append(
+                self.extract_salient_fish(recipe=recipe, all_img_dir=all_img_dir, response_img_dir=response_img_dir))
+            time_list.append(time.time() - time_start_batch)
+            eta = (len(nof_recipe)-i) * np.array(time_list).mean()
+            printProgress(i, len(nof_recipe), prefix='Progress:',
+                          suffix='IOU: %0.5f, ETA valid: %0.2f sec.' % (np.array(iou_list).mean(), eta),
+                          barLength=50)
+
         return True
 
     def extract_salient_fish(self, recipe,
@@ -975,68 +995,86 @@ class FishClass(BaseTrainer):
                                                    max_row_new, max_col_new)
 
         fusion_response = out_mean_attention[max_row_new, max_col_new] / 255.
+        if fusion_response > 0.3:
+            rect_pred = Rectangle(
+                xy=(left, top),
+                width=right - left,
+                height=bottom - top,
+                facecolor='none',
+                edgecolor='r',
+            )
+        else:
+            # we didn't detect fish in this image
+            rect_pred = Rectangle(xy=(0, 0),
+                                  width=0,
+                                  height=0,
+                                  facecolor='none',
+                                  edgecolor='g')
 
-        rect_pred = Rectangle(
-            xy=(left, top),
-            width=right - left,
-            height=bottom - top,
-            facecolor='none',
-            edgecolor='r',
-        )
-
-        # We get the ground truth from the annotation using sloth
+        # we incorporate NoF class here for minimum change of code
         img = np.asarray(img_origin)
-        for i, anno in enumerate([self.annotations[recipe.name]['sloth']]):
-            # some annotations are outside the image
-            anno['x'] = min(max(0, anno['x']), img.shape[1])
-            anno['y'] = min(max(0, anno['y']), img.shape[0])
-            img_class = self.class_idx_to_strclass[recipe.annotations['fish_class']]
-            rect_gt = Rectangle(xy=(int(anno['x']), int(anno['y'])),
-                                width=int(anno['width']),
-                                height=int(anno['height']),
-                                facecolor='none',
-                                edgecolor='g')
+        if hasattr(recipe, 'img_class'):
+            if recipe.img_class == 'Nof':
+                img_class = 'Nof'
+                rect_gt = Rectangle(xy=(0, 0),
+                                    width=0,
+                                    height=0,
+                                    facecolor='none',
+                                    edgecolor='g')
+        else:
+            # We get the ground truth from the annotation using sloth
+            for i, anno in enumerate([self.annotations[recipe.name]['sloth']]):
+                # some annotations are outside the image
+                anno['x'] = min(max(0, anno['x']), img.shape[1])
+                anno['y'] = min(max(0, anno['y']), img.shape[0])
+                img_class = self.class_idx_to_strclass[recipe.annotations['fish_class']]
+                rect_gt = Rectangle(xy=(int(anno['x']), int(anno['y'])),
+                                    width=int(anno['width']),
+                                    height=int(anno['height']),
+                                    facecolor='none',
+                                    edgecolor='g')
 
         # get the Intersection over Union (IoU)
         iou = bb_intersection_over_union(rect_pred, rect_gt)
 
         # visualisation
-        plt.clf()
-        plt.subplot(2, 3, 1)
-        im = plt.imshow(out_mean * 1.0 / 255)
-        im.set_norm(self.color_norm)
-        plt.title('Scale response:  ' +
-                  str(['{:.3f}'.format(i) for i in [l[max_row_new, max_col_new] / 255. for l in resized_response]]) +
-                  '.\n  Corresponding: ' + str(['{:.3f}'.format(i) for i in self.scale_list]))
-
-        plt.subplot(2, 3, 2)
-        im = plt.imshow(out_mean_attention * 1.0 / 255)
-        im.set_norm(self.color_norm)
-        # plt.colorbar(ticks=np.linspace(0, 1.0, 10, endpoint=True))
+        fig1 = plt.figure(1, figsize=(16, 8))
+        fig1.clf()
         if fusion_response < 0.3:
-            plt.title('New maximum response is %.2f, NO FISH!!!' % (fusion_response))
+            plt.title('Annotated fish type: %s, New maximum response is %.2f, NO FISH!!!' % (img_class, fusion_response))
         else:
-            plt.title('New maximum response is %.2f' % (fusion_response))
+            plt.title('Annotated fish type: %s, New maximum response is %.2f' % (img_class, fusion_response))
+        # figManager = plt.get_current_fig_manager()
+        # figManager.window.showMaximized()
+        sp1 = fig1.add_subplot(2, 3, 1)
+        im0 = sp1.imshow(out_mean * 1.0 / 255)
+        im0.set_norm(self.color_norm)
+        # plt.title('Scale response:  ' +
+        #           str(['{:.3f}'.format(i) for i in [l[max_row_new, max_col_new] / 255. for l in resized_response]]) +
+        #           '.\n  Corresponding: ' + str(['{:.3f}'.format(i) for i in self.scale_list]))
+        sp2 = fig1.add_subplot(2, 3, 2)
+        im1 = sp2.imshow(out_mean_attention * 1.0 / 255)
+        im1.set_norm(self.color_norm)
+        # plt.colorbar(ticks=np.linspace(0, 1.0, 10, endpoint=True))
 
-        rect_axes_1 = plt.subplot(2, 3, 3)
-        plt.imshow(img_origin)
-        plt.scatter(x=[max_col], y=[max_row], color='b', s=80, alpha=.5)
-        plt.scatter(x=[max_col_new], y=[max_row_new], color='r', s=30, marker='^', alpha=1)
-        rect_axes_1.add_patch(rect_pred)
-        rect_axes_1.add_patch(rect_gt)
-        rect_axes_1.text(rect_pred.xy[0], rect_pred.xy[1], 'IoU: %.3f'%(iou), fontsize=15, color='r')
+        sp3 = fig1.add_subplot(2, 3, 3)
+        sp3.imshow(img_origin)
+        sp3.scatter(x=[max_col], y=[max_row], color='b', s=80, alpha=.5)
+        sp3.scatter(x=[max_col_new], y=[max_row_new], color='r', s=30, marker='^', alpha=1)
+        sp3.add_patch(rect_pred)
+        sp3.add_patch(rect_gt)
+        plt.text(rect_pred.xy[0], rect_pred.xy[1], 'IoU: %.3f'%(iou), fontsize=15, color='r')
         plt.title("Red: pred, Green: gt. test image: " + recipe.name)
 
         # plot rectangle acquisition process
-        plt.subplot(2, 3, 4)
+        fig1.add_subplot(2, 3, 4)
         plt.imshow(show_map)
 
-        plt.subplot(2, 3, 5)
+        fig1.add_subplot(2, 3, 5)
         plt.imshow(chosen_region)
 
-        plt.subplot(2, 3, 6)
+        fig1.add_subplot(2, 3, 6)
         plt.imshow(img[top:bottom, left:right, :])
-        plt.title("Annotated fish type: " + img_class)
 
         # plt.draw()
         # plt.waitforbuttonpress(1)
@@ -1052,13 +1090,329 @@ class FishClass(BaseTrainer):
         # 	1. Save response map for IoU metadata optimization
         np.save(os.path.join(response_map_dir, recipe.name+'.npy'), out_mean_attention)
 
-        #if iou < 0.1:
-            # there could be two possibilities
-            # (1) the prediction contains a fish but the biggest annotation doest not correspond to this detection
-            # (2) the prediction simply is not a fish, and we needs to put it back to the background category
-            # regardless we need to save it to a negative folder and then examin it manully
-        #print('Finish saving figure: '+os.path.join(upper_dir, recipe.name))
         return iou
+
+    @property
+    def iou_meta_parameter_selection(self):
+
+        response_img_dir = os.path.join(self.exp_dir_path, 'response_maps')
+        self.color_norm = colors.Normalize(vmin=0, vmax=1)
+
+        # create a pseudo recipe for NoF class... and feed it into fish detection pipeline
+        nof_recipe = []
+        for fish_id in os.listdir(os.path.join(self.args.train_dir_path, 'NoF')):
+            recipe = Bunch(name=fish_id,
+                           path=os.path.join(self.args.train_dir_path, 'NoF', fish_id),
+                           img_class='Nof',
+                           class_idx=7)
+            nof_recipe.append(recipe)
+
+        fusion_mini_response = 0.3
+        # Now we do a grid search over parameters: mul_factor = 0.5, expand_ratio = 1.6,
+        mul_factor_list = np.linspace(0.3, 0.6, num=4)
+        expand_ratio_list = np.linspace(1.2, 2.0, num=5)
+        iou_dict = {}
+        true_pos_dict = {}
+        false_pos_dict = {}
+        false_neg_dict = {}
+        predision_dict = {}
+        recall_dict = {}
+        mAP_dict = {}
+        # after grid search, mul_factor=0.4, expand_ratio_list=1.4 works best
+        # note the region for detection only counted as half in IoU
+        # IOU: 0.74767
+        mul_factor_list = [0.4]
+        expand_ratio_list = [1.4]
+        for mul_factor in mul_factor_list:
+                iou_dict[mul_factor] = {}
+                true_pos_dict[mul_factor] = {}
+                false_pos_dict[mul_factor] = {}
+                false_neg_dict[mul_factor] = {}
+                predision_dict[mul_factor] = {}
+                recall_dict[mul_factor] = {}
+                mAP_dict[mul_factor] = {}
+                for expand_ratio in expand_ratio_list:
+                    time_list = []
+                    iou_list = []
+                    true_pos_all= 0
+                    false_pos_all = 0
+                    false_neg_all = 0
+
+                    for i, recipe in enumerate(self.train_recipes):
+                        time_start_batch = time.time()
+                        iou, true_pos, false_pos, false_neg = self.iou_score(recipe=recipe,
+                                                       response_img_dir=response_img_dir,
+                                                       mul_factor=mul_factor,
+                                                       expand_ratio=expand_ratio,
+                                                       fusion_mini_response=fusion_mini_response)
+                        iou_list.append(iou)
+                        true_pos_all += true_pos
+                        false_pos_all += false_pos
+                        false_neg_all += false_neg
+                        time_list.append(time.time() - time_start_batch)
+                        eta = (len(self.train_recipes)+len(self.valid_recipes) - i) * np.array(time_list).mean()
+                        printProgress(i, len(self.train_recipes) + len(self.valid_recipes), prefix='Progress:',
+                                      suffix='IOU error: %0.5f, ETA train: %0.2f sec.' % (np.array(iou_list).mean(), eta),
+                                      barLength=50)
+                    for i, recipe in enumerate(self.valid_recipes):
+                        time_start_batch = time.time()
+                        iou, true_pos, false_pos, false_neg = self.iou_score(recipe=recipe,
+                                                       response_img_dir=response_img_dir,
+                                                       mul_factor=mul_factor,
+                                                       expand_ratio=expand_ratio,
+                                                       fusion_mini_response=fusion_mini_response)
+                        iou_list.append(iou)
+                        true_pos_all += true_pos
+                        false_pos_all += false_pos
+                        false_neg_all += false_neg
+                        time_list.append(time.time() - time_start_batch)
+                        eta = (len(self.train_recipes)+len(self.valid_recipes) - i) * np.array(time_list).mean()
+                        printProgress(i+len(self.train_recipes), len(self.train_recipes) + len(self.valid_recipes), prefix='Progress:',
+                                      suffix='IOU: %0.5f, ETA valid: %0.2f sec.' % (np.array(iou_list).mean(), eta),
+                                      barLength=50)
+
+                    iou_dict[mul_factor][expand_ratio] = np.array(iou_list).mean()
+                    true_pos_dict[mul_factor][expand_ratio] = true_pos_all
+                    false_pos_dict[mul_factor][expand_ratio] = false_pos_all
+                    false_neg_dict[mul_factor][expand_ratio] = false_neg_all
+                    predision_dict[mul_factor][expand_ratio] = true_pos_all * 1.0 / (true_pos_all + false_pos_all)
+                    recall_dict[mul_factor][expand_ratio] = true_pos_all * 1.0 / (true_pos_all + false_neg_all)
+                    mAP_dict[mul_factor][expand_ratio] = predision_dict[mul_factor][expand_ratio] * recall_dict[mul_factor][
+                        expand_ratio]
+                    print('mul_factor: %.2f, expand_ratio: %.2f' % (mul_factor, expand_ratio))
+                    print("true_pos_all: %d, false_pos_dict: %d, false_neg_dict: %d" % (true_pos_all, false_pos_all, false_neg_all))
+                    print("Precsion: %.2f, Recall: %.2f, mAP: %.2f" % (predision_dict[mul_factor][expand_ratio],
+                                                                       recall_dict[mul_factor][expand_ratio],
+                                                                       mAP_dict[mul_factor][expand_ratio]))
+                    print("finish train valid evaluation, now move on to NoF")
+                    for i, recipe in enumerate(nof_recipe):
+                        time_start_batch = time.time()
+                        iou, true_pos, false_pos, false_neg = self.iou_score(recipe=recipe,
+                                                                             response_img_dir=response_img_dir,
+                                                                             mul_factor=mul_factor,
+                                                                             expand_ratio=expand_ratio,
+                                                                             fusion_mini_response=fusion_mini_response)
+                        iou_list.append(iou)
+                        true_pos_all += true_pos
+                        false_pos_all += false_pos
+                        false_neg_all += false_neg
+                        time_list.append(time.time() - time_start_batch)
+                        eta = (len(nof_recipe) -i) * np.array(time_list).mean()
+                        printProgress(i, len(nof_recipe), prefix='Progress:',
+                                      suffix='IOU: %0.5f, ETA valid: %0.2f sec.' % (np.array(iou_list).mean(), eta),
+                                      barLength=50)
+
+                        iou_dict[mul_factor][expand_ratio] = np.array(iou_list).mean()
+                        true_pos_dict[mul_factor][expand_ratio] = true_pos_all
+                        false_pos_dict[mul_factor][expand_ratio] = false_pos_all
+                        false_neg_dict[mul_factor][expand_ratio] = false_neg_all
+                        predision_dict[mul_factor][expand_ratio] = true_pos_all * 1.0 / (true_pos_all+false_pos_all)
+                        recall_dict[mul_factor][expand_ratio] = true_pos_all * 1.0 / (true_pos_all + false_neg_all)
+                        mAP_dict[mul_factor][expand_ratio] = predision_dict[mul_factor][expand_ratio] * recall_dict[mul_factor][expand_ratio]
+                    print('mul_factor: %.2f, expand_ratio: %.2f'%(mul_factor, expand_ratio))
+                    print("true_pos_all: %d, false_pos_dict: %d, false_neg_dict: %d"%(true_pos_all, false_pos_all, false_neg_all))
+                    print("Precsion: %.2f, Recall: %.2f, mAP: %.2f"%(predision_dict[mul_factor][expand_ratio],
+                                                                     recall_dict[mul_factor][expand_ratio],
+                                                                     mAP_dict[mul_factor][expand_ratio]))
+
+        return True
+
+    def iou_score(self, recipe, response_img_dir='response_maps',
+                  mul_factor=0.5, expand_ratio=1.6, fusion_mini_response=0.3):
+        img = load_img(recipe.path)
+        img_origin = img.copy()
+        # we incorporate NoF class here for minimum change of code
+        img = np.asarray(img_origin)
+        if hasattr(recipe, 'img_class'):
+            if recipe.img_class == 'Nof':
+                img_class = 'Nof'
+                rect_gt = Rectangle(xy=(0, 0),
+                                    width=0,
+                                    height=0,
+                                    facecolor='none',
+                                    edgecolor='g')
+        else:
+            # We get the ground truth from the annotation using sloth
+            for i, anno in enumerate([self.annotations[recipe.name]['sloth']]):
+                # some annotations are outside the image
+                anno['x'] = min(max(0, anno['x']), img.shape[1])
+                anno['y'] = min(max(0, anno['y']), img.shape[0])
+                img_class = self.class_idx_to_strclass[recipe.annotations['fish_class']]
+                rect_gt = Rectangle(xy=(int(anno['x']), int(anno['y'])),
+                                    width=int(anno['width']),
+                                    height=int(anno['height']),
+                                    facecolor='none',
+                                    edgecolor='g')
+
+        response_map_dir = os.path.join(response_img_dir, img_class)
+        out_mean_attention = np.load(os.path.join(response_map_dir, recipe.name + '.npy'))
+        max_row_new, max_col_new = np.unravel_index(np.argmax(out_mean_attention), out_mean_attention.shape)
+
+        # now from the response map we generate the bounding box.
+        show_map, chosen_region, top, left, bottom, right = \
+            generate_boundingbox_from_response_map(out_mean_attention,
+                                                   max_row_new, max_col_new,
+                                                   mul_factor, expand_ratio)
+
+        fusion_response = out_mean_attention[max_row_new, max_col_new] / 255.
+
+        if fusion_response > fusion_mini_response:
+            rect_pred = Rectangle(
+                xy=(left, top),
+                width=right - left,
+                height=bottom - top,
+                facecolor='none',
+                edgecolor='r',
+            )
+        else:
+            # we didn't detect fish in this image
+            rect_pred = Rectangle(xy=(0, 0),
+                                  width=0,
+                                  height=0,
+                                  facecolor='none',
+                                  edgecolor='g')
+
+        # get the Intersection over Union (IoU)
+        iou = bb_intersection_over_union(rect_pred, rect_gt, detection_area_ratio=0.5)
+
+        # visualisation
+        if False:
+            fig1 = plt.figure(1)
+            fig1.clf()
+            if fusion_response < 0.3:
+                plt.title(
+                    'Annotated fish type: %s, New maximum response is %.2f, NO FISH!!!' % (img_class, fusion_response))
+            else:
+                plt.title('Annotated fish type: %s, New maximum response is %.2f' % (img_class, fusion_response))
+            figManager = plt.get_current_fig_manager()
+            figManager.window.showMaximized()
+            sp1 = fig1.add_subplot(1, 4, 1)
+            im0 = sp1.imshow(out_mean_attention * 1.0 / 255)
+            im0.set_norm(self.color_norm)
+
+            sp2 = fig1.add_subplot(1, 4, 2)
+            sp2.imshow(img_origin)
+            sp2.scatter(x=[max_col_new], y=[max_row_new], color='r', s=30, marker='^', alpha=1)
+            sp2.add_patch(rect_pred)
+            sp2.add_patch(rect_gt)
+            plt.text(rect_pred.xy[0], rect_pred.xy[1], 'IoU: %.3f' % (iou), fontsize=15, color='r')
+            plt.title("Red: pred, Green: gt. test image: " + recipe.name)
+
+            sp3 = fig1.add_subplot(1, 4, 3)
+            sp3.imshow(img[top:bottom, left:right, :])
+
+            sp4 = fig1.add_subplot(1, 4, 4)
+            sp4.imshow(img[rect_gt.xy[1]:rect_gt.xy[1]+rect_gt._height,
+                                  rect_gt.xy[0]:rect_gt.xy[0]+rect_gt._width,:])
+            plt.draw()
+            plt.waitforbuttonpress(1)
+
+        # if iou < 0.1:
+        # there could be two possibilities
+        # (1) the prediction contains a fish but the biggest annotation doest not
+        #     correspond to this detection
+        # (2) the prediction simply is not a fish, and we needs to put it back to
+        #     the background category
+        # regardless we need to save it to a negative folder and then examine it manully
+        # print('Finish saving figure: '+os.path.join(upper_dir, recipe.name))
+        upper_dir = os.path.join(self.exp_dir_path, 'train_classification')
+        if not os.path.exists(upper_dir):
+            os.mkdir(upper_dir)
+        true_pos_dir = os.path.join(upper_dir, 'true_pos_dir')
+        if not os.path.exists(true_pos_dir):
+            os.mkdir(true_pos_dir)
+        false_neg_dir = os.path.join(upper_dir, 'false_neg_dir')
+        if not os.path.exists(false_neg_dir):
+            os.mkdir(false_neg_dir)
+        false_pos_dir = os.path.join(upper_dir, 'false_pos_dir')
+        if not os.path.exists(false_pos_dir):
+            os.mkdir(false_pos_dir)
+
+        if iou > 0.3:
+            true_pos = 1
+            false_pos = 0
+            false_neg = 0
+            # it is a true positive of detected fish
+            if not os.path.exists(os.path.join(true_pos_dir, img_class)):
+                os.mkdir(os.path.join(true_pos_dir, img_class))
+            scipy.misc.imsave(os.path.join(true_pos_dir, img_class, recipe.name),
+                              img[top:bottom, left:right, :])
+        else:
+            # we fail to make the correct detection
+            true_pos = 0
+            false_pos = 1
+            false_neg = 1
+            scipy.misc.imsave(os.path.join(false_pos_dir, img_class+'_'+recipe.name),
+                              img[top:bottom, left:right, :])
+            # we also save the false negative images to further train if it iss a fish)
+            if not img_class.lower()=='nof':
+                if not os.path.exists(os.path.join(false_neg_dir, img_class)):
+                    os.mkdir(os.path.join(false_neg_dir, img_class))
+                scipy.misc.imsave(os.path.join(false_neg_dir, img_class, recipe.name),
+                                  img[rect_gt.xy[1]:rect_gt.xy[1]+rect_gt._height,
+                                  rect_gt.xy[0]:rect_gt.xy[0]+rect_gt._width,:])
+
+        return iou, true_pos, false_pos, false_neg
+
+    def extract_test_fish(self):
+
+        test_list = os.listdir(self.args.test_dir_url)
+        if not len(test_list) == 1000:
+            raise AssertionError()
+
+        time_list = []
+        for im_name in test_list:
+            time_start_batch = time.time()
+            img = load_img(os.path.join(self.args.test_dir_url, im_name))
+            # we incorporate NoF class here for minimum change of code
+            img_origin = img.copy()
+            # we sample different scale
+            out_list = []
+            for i in range(self.total_scale):
+                basewidth = int(float(img_origin.size[0]) * self.scale_list[i])
+                hsize = int((float(img_origin.size[1]) * self.scale_list[i]))
+                img = img.resize((basewidth, hsize))
+                x = img_to_array(img)  #
+                # print("test image is of shape: " + str(x.shape))  # this is a Numpy array with shape (3, 150, 150)
+                x = x.reshape((1,) + x.shape)
+                x_new = x - np.asarray(self.resnet50_data_mean)[None, :, None, None]
+                # predict the model output
+                out = self.model.predict(x_new)
+                # print(out.shape)
+                out = softmax(out)
+                out_list.append(out[0, 0, :, :])
+
+            # ########################## visualise the fish detection result
+            # max_list store the maximum response for different scales
+            max_list = [np.max(x) for x in out_list]
+            resize_shape = [x for x in img_origin.size[::-1]]
+            resized_response = [scipy.misc.imresize(x, resize_shape) * m for x, m in zip(out_list, max_list)]
+            out_mean = np.mean(np.asarray(resized_response), axis=0)
+
+            # attention map add heuristic low confidence near the boundaries
+            attention_map = generate_attention_map(out_mean.shape)
+            out_mean_attention = np.multiply(attention_map, out_mean)
+            max_row_new, max_col_new = np.unravel_index(np.argmax(out_mean_attention), out_mean_attention.shape)
+
+            # now from the response map we generate the bounding box.
+            show_map, chosen_region, top, left, bottom, right = \
+                generate_boundingbox_from_response_map(out_mean_attention,
+                                                       max_row_new, max_col_new)
+
+            img = np.asarray(img_origin)
+            result_dict = {'out_mean_attention': out_mean_attention,
+                           'fusion_response': out_mean_attention[max_row_new, max_col_new] / 255.,
+                           'fish_image': img[top:bottom, left:right, :]}
+            # 	1. Save response map for IoU metadata optimization
+            np.save(os.path.join(self.exp_dir_path, 'training', im_name+'.npy'), result_dict)
+
+            time_list.append(time.time() - time_start_batch)
+            eta = (len(test_list)-i) * np.array(time_list).mean()
+            printProgress(i, len(test_list), prefix='Progress:',
+                          suffix='Remaining time: %0.2f sec.' % (eta),
+                          barLength=50)
+
+        return 1
 
     def do_training(self):
         '''
@@ -1085,6 +1439,11 @@ class FishClass(BaseTrainer):
             if self.args.fish_redetection > 0:
                 flag = self.fish_redetection()
                 return flag
+            if self.args.iou_meta_parameter_selection > 0:
+                flag = self.iou_meta_parameter_selection
+                return flag
+            if self.args.extract_test_fish > 0:
+                flag = self.extract_test_fish()
 
     def do_train_epoch(self, epoch_params, train_iterator, model):
 

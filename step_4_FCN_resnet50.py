@@ -127,7 +127,8 @@ for im_name in img_list[start_num:start_num+10]:
     # now from the response map we generate the bounding box.
     show_map, chosen_region, top, left, bottom, right = \
         generate_boundingbox_from_response_map(out_mean_attention,
-                                           max_row_new, max_col_new, mul_factor=0.2)
+                                           max_row_new, max_col_new, mul_factor=0.4,
+                                           expand_ratio=1.4)
 
     fusion_response = out_mean_attention[max_row_new, max_col_new] / 255.
 
@@ -163,17 +164,24 @@ for im_name in img_list[start_num:start_num+10]:
     rect_axes_1.add_patch(rect)
     plt.title("test image: " + im_name)
 
-    ### plot scale response maps
+    # plt.clf()
+    # plt.subplot(2, 3, 2)
+    # plt.imshow(img_origin)
+    # plt.axis('off')
+    # plt.scatter(x=[max_col_new], y=[max_row_new], color='r', s=30, marker='^', alpha=1)
+    # ## plot scale response maps
     # plot_scale_list = [0, total_scale/2, total_scale-1]
     # plt_count = 3
     # for i, out_x in enumerate(out_list):
     #     if i in plot_scale_list:
     #         plt_count += 1
     #         plt.subplot(2, 3, plt_count)
+    #         plt.axis('off')
     #         im = plt.imshow(out_x)
     #         im.set_norm(norm)
     #         plt.title('Scale is: %.2f, max response is: %.2f'%
     #                   (scale_list[i], resized_response[i][max_row_new, max_col_new] /255.))
+    # plt.savefig('./exp_dir/blog_fotos/multiscale_' + im_name, bbox_inches='tight')
 
     # plot rectangle acquisition process
     plt.subplot(2, 3, 4)

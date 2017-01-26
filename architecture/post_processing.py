@@ -46,8 +46,8 @@ def generate_attention_map(img_size, left_right_percentage=0.16, top_percentage=
 
 def generate_boundingbox_from_response_map(out_mean_attention,
                                            max_row_new, max_col_new,
-                                           mul_factor=0.5,
-                                           expand_ratio=1.6):
+                                           mul_factor=0.4,
+                                           expand_ratio=1.4):
     """
 
     :param out_mean_attention:
@@ -88,12 +88,16 @@ def generate_boundingbox_from_response_map(out_mean_attention,
     return show_map, chosen_region, top, left, bottom, right
 
 
-def bb_intersection_over_union(rect_pred, rect_gt):
+def bb_intersection_over_union(rect_pred, rect_gt, detection_area_ratio=0.5):
     # Intersection over Union (IoU)
     # determine the (x, y)-coordinates of the intersection rectangle
+    # if both of the boxes are empty, hence a NoF fish, we return iou==1
+    if rect_pred._width==0 and rect_pred._height==0 and rect_gt._width == 0 and rect_gt._height == 0:
+        return 1
 
     boxA = [rect_pred.xy[0], rect_pred.xy[1], rect_pred.xy[0] + rect_pred._width, rect_pred.xy[1] + rect_pred._height]
     boxB = [rect_gt.xy[0], rect_gt.xy[1], rect_gt.xy[0] + rect_gt._width, rect_gt.xy[1] + rect_gt._height]
+
     xA = max(boxA[0], boxB[0])
     yA = max(boxA[1], boxB[1])
     xB = min(boxA[2], boxB[2])
@@ -104,7 +108,10 @@ def bb_intersection_over_union(rect_pred, rect_gt):
 
     # compute the area of both the prediction and ground-truth
     # rectangles
-    boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+    # Di Wu deliberately downplay the effect of detection box area
+    # in the hope for grid search, we can have larger boundingbox that
+    # can have a more complete fish
+    boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1]) * detection_area_ratio
     boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
 
     # compute the intersection over union by taking the intersection
