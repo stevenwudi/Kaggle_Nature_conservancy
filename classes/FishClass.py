@@ -10,6 +10,7 @@ from collections import defaultdict
 import theano
 import keras
 import scipy
+import pandas as pd
 
 from classes.TrainerClass import BaseTrainer
 from classes.SaverClass import ExperimentSaver, Tee, load_obj, Saver
@@ -21,6 +22,7 @@ from classes.TrainerClass import ProcessFunc, MinibatchOutputDirector2, create_s
 import traceback
 from skimage.transform import warp, SimilarityTransform, AffineTransform
 from keras.preprocessing.image import load_img, img_to_array
+from keras.applications.resnet50 import preprocess_input
 
 from architecture.vgg_fcn import softmax
 from architecture.post_processing import generate_attention_map, generate_boundingbox_from_response_map, \
@@ -427,6 +429,7 @@ class FishClass(BaseTrainer):
             self.scale_prop = 1.1
             self.scale_list = [self.scale_prop ** (x) for x in range(self.total_scale)]
             self.color_norm = colors.Normalize(vmin=0, vmax=1)
+            self.img_input_shape = (200, 200)
             # this is a bad hack
             # self.model.optimizer.lr.set_value(0.1)
         else:
@@ -1092,7 +1095,6 @@ class FishClass(BaseTrainer):
 
         return iou
 
-    @property
     def iou_meta_parameter_selection(self):
 
         response_img_dir = os.path.join(self.exp_dir_path, 'response_maps')
@@ -1134,7 +1136,7 @@ class FishClass(BaseTrainer):
                 for expand_ratio in expand_ratio_list:
                     time_list = []
                     iou_list = []
-                    true_pos_all= 0
+                    true_pos_all = 0
                     false_pos_all = 0
                     false_neg_all = 0
 
@@ -1142,6 +1144,7 @@ class FishClass(BaseTrainer):
                         time_start_batch = time.time()
                         iou, true_pos, false_pos, false_neg = self.iou_score(recipe=recipe,
                                                        response_img_dir=response_img_dir,
+                                                       train_or_valid='train',
                                                        mul_factor=mul_factor,
                                                        expand_ratio=expand_ratio,
                                                        fusion_mini_response=fusion_mini_response)
@@ -1158,6 +1161,7 @@ class FishClass(BaseTrainer):
                         time_start_batch = time.time()
                         iou, true_pos, false_pos, false_neg = self.iou_score(recipe=recipe,
                                                        response_img_dir=response_img_dir,
+                                                       train_or_valid='valid',
                                                        mul_factor=mul_factor,
                                                        expand_ratio=expand_ratio,
                                                        fusion_mini_response=fusion_mini_response)
@@ -1184,11 +1188,16 @@ class FishClass(BaseTrainer):
                     print("Precsion: %.2f, Recall: %.2f, mAP: %.2f" % (predision_dict[mul_factor][expand_ratio],
                                                                        recall_dict[mul_factor][expand_ratio],
                                                                        mAP_dict[mul_factor][expand_ratio]))
+                    # tp = 2505, fp=740, fn=874
+                    # precision = 0.77, recall=0.74
+                    # mAP: 0.57
+
                     print("finish train valid evaluation, now move on to NoF")
                     for i, recipe in enumerate(nof_recipe):
                         time_start_batch = time.time()
                         iou, true_pos, false_pos, false_neg = self.iou_score(recipe=recipe,
                                                                              response_img_dir=response_img_dir,
+                                                                             train_or_valid='train',
                                                                              mul_factor=mul_factor,
                                                                              expand_ratio=expand_ratio,
                                                                              fusion_mini_response=fusion_mini_response)
@@ -1217,7 +1226,7 @@ class FishClass(BaseTrainer):
 
         return True
 
-    def iou_score(self, recipe, response_img_dir='response_maps',
+    def iou_score(self, recipe, response_img_dir='response_maps', train_or_valid='train',
                   mul_factor=0.5, expand_ratio=1.6, fusion_mini_response=0.3):
         img = load_img(recipe.path)
         img_origin = img.copy()
@@ -1315,7 +1324,7 @@ class FishClass(BaseTrainer):
         #     the background category
         # regardless we need to save it to a negative folder and then examine it manully
         # print('Finish saving figure: '+os.path.join(upper_dir, recipe.name))
-        upper_dir = os.path.join(self.exp_dir_path, 'train_classification')
+        upper_dir = os.path.join(self.exp_dir_path, 'train_classification', train_or_valid)
         if not os.path.exists(upper_dir):
             os.mkdir(upper_dir)
         true_pos_dir = os.path.join(upper_dir, 'true_pos_dir')
@@ -1362,55 +1371,162 @@ class FishClass(BaseTrainer):
 
         time_list = []
         for im_name in test_list:
+            if not os.path.isfile((os.path.join(self.exp_dir_path, 'test_response_maps', im_name+'.npy'))):
+                time_start_batch = time.time()
+                img = load_img(os.path.join(self.args.test_dir_url, im_name))
+                # we incorporate NoF class here for minimum change of code
+                img_origin = img.copy()
+                # we sample different scale
+                out_list = []
+                for i in range(self.total_scale):
+                    basewidth = int(float(img_origin.size[0]) * self.scale_list[i])
+                    hsize = int((float(img_origin.size[1]) * self.scale_list[i]))
+                    img = img.resize((basewidth, hsize))
+                    x = img_to_array(img)  #
+                    # print("test image is of shape: " + str(x.shape))  # this is a Numpy array with shape (3, 150, 150)
+                    x = x.reshape((1,) + x.shape)
+                    x_new = x - np.asarray(self.resnet50_data_mean)[None, :, None, None]
+                    # predict the model output
+                    out = self.model.predict(x_new)
+                    # print(out.shape)
+                    out = softmax(out)
+                    out_list.append(out[0, 0, :, :])
+
+                # ########################## visualise the fish detection result
+                # max_list store the maximum response for different scales
+                max_list = [np.max(x) for x in out_list]
+                resize_shape = [x for x in img_origin.size[::-1]]
+                resized_response = [scipy.misc.imresize(x, resize_shape) * m for x, m in zip(out_list, max_list)]
+                out_mean = np.mean(np.asarray(resized_response), axis=0)
+
+                # attention map add heuristic low confidence near the boundaries
+                attention_map = generate_attention_map(out_mean.shape)
+                out_mean_attention = np.multiply(attention_map, out_mean)
+                max_row_new, max_col_new = np.unravel_index(np.argmax(out_mean_attention), out_mean_attention.shape)
+
+                # now from the response map we generate the bounding box.
+                show_map, chosen_region, top, left, bottom, right = \
+                    generate_boundingbox_from_response_map(out_mean_attention,
+                                                           max_row_new, max_col_new)
+
+                img = np.asarray(img_origin)
+                result_dict = {'out_mean_attention': out_mean_attention,
+                               'fusion_response': out_mean_attention[max_row_new, max_col_new] / 255.,
+                               'fish_image': img[top:bottom, left:right, :]}
+                # 	1. Save response map for IoU metadata optimization
+                np.save(os.path.join(self.exp_dir_path, 'test_response_maps', im_name+'.npy'), result_dict)
+
+                time_list.append(time.time() - time_start_batch)
+                eta = (len(test_list)-i) * np.array(time_list).mean()
+                printProgress(i, len(test_list), prefix='Progress:',
+                              suffix='Remaining time: %0.2f sec.' % (eta),
+                              barLength=50)
+
+        test_list = os.listdir(self.args.test_dir_url)
+        if not len(test_list) == 1000:
+            raise AssertionError()
+
+        # a script to save extracted test images:
+        test_image_dir = os.path.join(self.exp_dir_path, 'test_img')
+        if not os.path.exists(test_image_dir):
+            os.mkdir(test_image_dir)
+        for i, im_name in enumerate(test_list):
+            result_dict = np.load(os.path.join(self.exp_dir_path, 'test_response_maps', im_name + '.npy')).item()
+            img = result_dict['fish_image']
+            scipy.misc.imsave(os.path.join(test_image_dir, im_name), img)
+
+        return 1
+
+    def classify_test(self):
+        test_list = os.listdir(self.args.test_dir_url)
+        if not len(test_list) == 1000:
+            raise AssertionError()
+        fish_classes = ['ALB', 'BET', 'DOL', 'LAG', 'NoF', 'OTHER', 'SHARK', 'YFT']
+        from keras.models import load_model
+        model = load_model(os.path.join(self.exp_dir_path, 'fine_tuned_top_model_no_enhancement.h5'))
+
+        time_list = []
+        test_result = {}
+        for im_id, im_name in enumerate(test_list):
             time_start_batch = time.time()
-            img = load_img(os.path.join(self.args.test_dir_url, im_name))
-            # we incorporate NoF class here for minimum change of code
-            img_origin = img.copy()
-            # we sample different scale
-            out_list = []
-            for i in range(self.total_scale):
-                basewidth = int(float(img_origin.size[0]) * self.scale_list[i])
-                hsize = int((float(img_origin.size[1]) * self.scale_list[i]))
-                img = img.resize((basewidth, hsize))
-                x = img_to_array(img)  #
-                # print("test image is of shape: " + str(x.shape))  # this is a Numpy array with shape (3, 150, 150)
-                x = x.reshape((1,) + x.shape)
-                x_new = x - np.asarray(self.resnet50_data_mean)[None, :, None, None]
-                # predict the model output
-                out = self.model.predict(x_new)
-                # print(out.shape)
-                out = softmax(out)
-                out_list.append(out[0, 0, :, :])
+            test_result[im_name] = {}
+            result_dict = np.load(os.path.join(self.exp_dir_path, 'test_response_maps', im_name+'.npy')).item()
+            img = result_dict['fish_image']
+            img_list = []
+            pred_list = []
+            # we have the images of sets with 4 sets of 90 degrees rotation
+            X = np.zeros(shape=(4, 3, self.img_input_shape[0], self.img_input_shape[1]))
+            img_list.append(img)
+            for i in range(3):
+                img_list.append(np.rot90(img_list[-1]))
 
-            # ########################## visualise the fish detection result
-            # max_list store the maximum response for different scales
-            max_list = [np.max(x) for x in out_list]
-            resize_shape = [x for x in img_origin.size[::-1]]
-            resized_response = [scipy.misc.imresize(x, resize_shape) * m for x, m in zip(out_list, max_list)]
-            out_mean = np.mean(np.asarray(resized_response), axis=0)
+            for i,im in enumerate(img_list):
+                x = scipy.misc.imresize(im, self.img_input_shape)
+                x = x.transpose(2, 0, 1)
+                # x have shape (None, 3, 200, 200)
+                x = x.reshape((1,) + x.shape).astype('float32')
+                x[:, 0, :, :] -= 103.939
+                x[:, 1, :, :] -= 116.779
+                x[:, 2, :, :] -= 123.68
+                # x = preprocess_input(x)
+                # # -- we should not use this because of training regime!
+                X[i] = x
 
-            # attention map add heuristic low confidence near the boundaries
-            attention_map = generate_attention_map(out_mean.shape)
-            out_mean_attention = np.multiply(attention_map, out_mean)
-            max_row_new, max_col_new = np.unravel_index(np.argmax(out_mean_attention), out_mean_attention.shape)
+            prediction = model.predict(X)
+            #pred_list.append(prediction)
+            # we average the 4 rotations' predictions
+            preds = np.asarray(prediction).mean(axis=0)
+            if False:
+                for i, im in enumerate(img_list):
+                    plt.subplot(1,4,i+1)
+                    plt.imshow(im)
+                    fidx = np.argmax(pred_list[i])
+                    fname = fish_classes[fidx]
+                    plt.title("%s: %.3f"%(fname, prediction[i][0, fidx]))
+                    plt.waitforbuttonpress(1)
 
-            # now from the response map we generate the bounding box.
-            show_map, chosen_region, top, left, bottom, right = \
-                generate_boundingbox_from_response_map(out_mean_attention,
-                                                       max_row_new, max_col_new)
-
-            img = np.asarray(img_origin)
-            result_dict = {'out_mean_attention': out_mean_attention,
-                           'fusion_response': out_mean_attention[max_row_new, max_col_new] / 255.,
-                           'fish_image': img[top:bottom, left:right, :]}
-            # 	1. Save response map for IoU metadata optimization
-            np.save(os.path.join(self.exp_dir_path, 'training', im_name+'.npy'), result_dict)
-
+            test_result[im_name]['preds'] = preds
+            test_result[im_name]['fusion_response'] = result_dict['fusion_response']
             time_list.append(time.time() - time_start_batch)
-            eta = (len(test_list)-i) * np.array(time_list).mean()
-            printProgress(i, len(test_list), prefix='Progress:',
+            eta = (len(test_list) - im_id) * np.array(time_list).mean()
+            printProgress(im_id, len(test_list), prefix='Progress:',
                           suffix='Remaining time: %0.2f sec.' % (eta),
                           barLength=50)
+
+        def do_clip(arr, mx):
+            return np.clip(arr, (1 - mx) / 7, mx)
+
+        def format(value):
+            return "%.10f" % do_clip(value, 0.95)
+
+        timestr = time.strftime("%Y%m%d-%H%M%S")
+        with open('./exp_dir/fish_classification/submission/'+timestr+'_submission.csv', 'w') as f:
+            f.write('image,')
+            for c in fish_classes[:-1]:
+                f.write(c)
+                f.write(',')
+            for c in fish_classes[-1]:
+                f.write(c)
+            f.write('\n')
+
+            for im_name in sorted(test_result.keys()):
+                f.write(im_name)
+                f.write(',')
+                # if test_result[im_name]['fusion_response']<0.3:
+                #     print(im_name)
+                #     print(test_result[im_name]['preds'][0][4])
+                #     #  check background image
+                #     # result_dict = np.load(os.path.join(self.exp_dir_path, 'training', im_name + '.npy')).item()
+                #     # img = result_dict['fish_image']
+                #     # scipy.misc.imsave(os.path.join(self.exp_dir_path, im_name), img)
+                #     f.write('0.004, 0.004, 0.004, 0.004, 0.966, 0.01, 0.004, 0.004')
+                #     f.write('\n')
+                # else:
+                for p in test_result[im_name]['preds'][:-1]:
+                    f.write(format(p))
+                    f.write(',')
+                f.write(format(test_result[im_name]['preds'][-1]))
+                f.write('\n')
 
         return 1
 
@@ -1440,10 +1556,14 @@ class FishClass(BaseTrainer):
                 flag = self.fish_redetection()
                 return flag
             if self.args.iou_meta_parameter_selection > 0:
-                flag = self.iou_meta_parameter_selection
+                flag = self.iou_meta_parameter_selection()
                 return flag
             if self.args.extract_test_fish > 0:
-                flag = self.extract_test_fish()
+                self.extract_test_fish()
+                return 1
+            if self.args.classify_test:
+                self.classify_test()
+                return 1
 
     def do_train_epoch(self, epoch_params, train_iterator, model):
 

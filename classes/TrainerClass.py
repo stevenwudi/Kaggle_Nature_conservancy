@@ -394,6 +394,7 @@ class BaseTrainer(object):
         parser.add_argument('--fish_redetection', type=int, default=0, help='TODO')
         parser.add_argument('--iou_meta_parameter_selection', type=int, default=0, help='TODO')
         parser.add_argument('--extract_test_fish', type=int, default=0, help='TODO')
+        parser.add_argument('--classify_test', type=int, default=0, help='TODO')
         parser.add_argument('--sloth-annotations-url', type=str, default=None, help='TODO')
         parser.add_argument('--auto-sloth-annotations-url', type=str, default=None, help='TODO')
         parser.add_argument('--auto-indygo-annotations-url', type=str, default=None, help='TODO')
@@ -408,7 +409,7 @@ class BaseTrainer(object):
 
         # paths
         parser.add_argument('--train-dir-url', type=str, default=None, help='TODO')
-        parser.add_argument('--test-dir-url', type=str, default=None, help='TODO')
+        parser.add_argument('--test_dir_url', type=str, default=None, help='TODO')
         parser.add_argument('--train-csv-url', type=str, default=None, help='TODO')
         parser.add_argument('--test-csv-url', type=str, default=None, help='TODO')
         parser.add_argument('--mean-data-url', type=str, default=None, help='TODO')
@@ -805,7 +806,7 @@ class BaseTrainer(object):
                 filename = 'img_{mb_idx}_{name}'.format(mb_idx=mb_idx, name=name) + path_suffix
                 path = self.saver.get_path('imgs', filename)
 
-                print 'show_images: saving to ', path
+                print('show_images: saving to ', path)
                 plot_image_to_file(img, path)
                 k += 1
                 if k >= n:
@@ -818,7 +819,7 @@ class BaseTrainer(object):
         control_args = self.transform_urls_to_paths(control_args)
         prog_args = self.transform_urls_to_paths(parser.parse_args(prog_argv))
 
-        print vars(control_args)
+        print(vars(control_args))
         prog_args.load_arch_path = control_args.load_arch_path
         if control_args.exp_dir_path:
             exp_dir_path = control_args.exp_dir_path

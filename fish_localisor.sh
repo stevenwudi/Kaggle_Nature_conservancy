@@ -78,3 +78,51 @@ echo --test-csv-url ${SAMPLE_SUB} --name ${NAME} \
 /home/stevenwudi/tensorflow/bin/python /home/stevenwudi/Documents/Python_Project/Kaggle_The_Nature_Conversancy_Fisheries_Monitoring/Kaggle_Nature_conservancy/main.py --train-dir-url /home/stevenwudi/Documents/Python_Project/Kaggle_The_Nature_Conversancy_Fisheries_Monitoring/train --name fish_localise --exp-dir-url exp_dir/fish_localise --target-name crop1 --arch vgg_convolutional --crop-h 224 --crop-w 224 --sloth-annotations-url boundingbox_annotation --aug-params crop1_buckets --fish-types 7 --global-saver-url global --glr-burnout 15 --glr-decay 0.9999 --fc-l2-reg 0.05 --conv-l2-reg 0.0005 --dropout 0 --dropout-coeff 0.5 --debug_plot 0 --n-samples-valid 1 --mb-size 64 --buckets 60 --monitor-freq 10 --trainable 0 --valid-seed 1000 --process-recipe-name vgg_keras_recipe --glr 0.0001 --show_images 0 --collect_training_validation_images 1 --collect_training_validation_stats 1
 
 /home/stevenwudi/tensorflow/bin/python /home/stevenwudi/Documents/Python_Project/Kaggle_The_Nature_Conversancy_Fisheries_Monitoring/Kaggle_Nature_conservancy/main.py --train-dir-url /home/stevenwudi/Documents/Python_Project/Kaggle_The_Nature_Conversancy_Fisheries_Monitoring/train --name fish_localise --exp-dir-url exp_dir/fish_classification --target-name crop1 --arch vgg_convolutional --crop-h 224 --crop-w 224 --sloth-annotations-url boundingbox_annotation --aug-params crop1_buckets --fish-types 7 --global-saver-url global --glr-burnout 15 --glr-decay 0.9999 --fc-l2-reg 0.05 --conv-l2-reg 0.0005 --dropout 0 --dropout-coeff 0.5 --debug_plot 0 --n-samples-valid 1 --mb-size 64 --buckets 60 --monitor-freq 10 --trainable 0 --valid-seed 1000 --process-recipe-name vgg_keras_recipe --glr 0.0001 --show_images 0 --collect_training_validation_images 0 --load-arch-path /home/stevenwudi/Documents/Python_Project/Kaggle_The_Nature_Conversancy_Fisheries_Monitoring/Kaggle_Nature_conservancy/exp_dir/fish_localise/training/fish_detection_resnet50_none_input.h5 --fish_redetection 0 --iou_meta_parameter_selection 0 --extract_test_fish 1 --init_model 1 --test-dir-url /home/stevenwudi/Documents/Python_Project/Kaggle_The_Nature_Conversancy_Fisheries_Monitoring/test_stg1
+
+im_name =
+img_03014.jpg
+0.00117056
+img_07147.jpg
+0.991622
+img_00763.jpg
+0.497406
+img_07859.jpg
+0.0696555
+img_04726.jpg
+0.120357
+img_06541.jpg
+0.893519
+img_00667.jpg
+0.326806
+img_01716.jpg
+0.311201
+img_01782.jpg
+0.979848
+img_01541.jpg
+0.993726
+img_01505.jpg
+0.00908641
+img_01204.jpg
+0.389952
+img_04453.jpg
+0.942408
+img_02865.jpg
+0.0872455
+img_06585.jpg
+0.297395
+img_05475.jpg
+0.911858
+img_05059.jpg
+0.999971
+img_06947.jpg
+1.06344e-05
+img_03456.jpg
+0.997345
+img_06272.jpg
+0.542166
+img_04503.jpg
+0.105628
+img_03924.jpg
+0.00161671
+img_00196.jpg
+0.978968
