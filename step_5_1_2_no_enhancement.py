@@ -75,4 +75,3 @@ for dir_pos in fish_type:
 
 print(fish_num, np.sum(fish_num))
 # 752 for valid
-

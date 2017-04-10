@@ -7,10 +7,12 @@ from bunch import Bunch
 import json
 import time
 from collections import defaultdict
+import matplotlib.patches as patches
 import theano
 import keras
 import scipy
 import pandas as pd
+import cPickle
 
 from classes.TrainerClass import BaseTrainer
 from classes.SaverClass import ExperimentSaver, Tee, load_obj, Saver
@@ -25,8 +27,7 @@ from keras.preprocessing.image import load_img, img_to_array
 from keras.applications.resnet50 import preprocess_input
 
 from architecture.vgg_fcn import softmax
-from architecture.post_processing import generate_attention_map, generate_boundingbox_from_response_map, \
-    bb_intersection_over_union, printProgress
+from architecture.post_processing import generate_attention_map, generate_boundingbox_from_response_map, generate_boundingbox_from_response_map_square, bb_intersection_over_union, printProgress
 
 from matplotlib import pyplot as plt
 from matplotlib import colors
@@ -1366,124 +1367,215 @@ class FishClass(BaseTrainer):
     def extract_test_fish(self):
 
         test_list = os.listdir(self.args.test_dir_url)
-        if not len(test_list) == 1000:
-            raise AssertionError()
+        if len(test_list)==1000:
+            test_response_map_dir = 'test_response_maps'
+            test_image_dir = os.path.join(self.exp_dir_path, 'test_img')
+        else:
+            test_response_map_dir = 'test_response_maps_stg2'
+            test_image_dir = os.path.join(self.exp_dir_path, 'test_img_stg2')
 
-        time_list = []
-        for im_name in test_list:
-            if not os.path.isfile((os.path.join(self.exp_dir_path, 'test_response_maps', im_name+'.npy'))):
-                time_start_batch = time.time()
-                img = load_img(os.path.join(self.args.test_dir_url, im_name))
-                # we incorporate NoF class here for minimum change of code
-                img_origin = img.copy()
-                # we sample different scale
-                out_list = []
-                for i in range(self.total_scale):
-                    basewidth = int(float(img_origin.size[0]) * self.scale_list[i])
-                    hsize = int((float(img_origin.size[1]) * self.scale_list[i]))
-                    img = img.resize((basewidth, hsize))
-                    x = img_to_array(img)  #
-                    # print("test image is of shape: " + str(x.shape))  # this is a Numpy array with shape (3, 150, 150)
-                    x = x.reshape((1,) + x.shape)
-                    x_new = x - np.asarray(self.resnet50_data_mean)[None, :, None, None]
-                    # predict the model output
-                    out = self.model.predict(x_new)
-                    # print(out.shape)
-                    out = softmax(out)
-                    out_list.append(out[0, 0, :, :])
-
-                # ########################## visualise the fish detection result
-                # max_list store the maximum response for different scales
-                max_list = [np.max(x) for x in out_list]
-                resize_shape = [x for x in img_origin.size[::-1]]
-                resized_response = [scipy.misc.imresize(x, resize_shape) * m for x, m in zip(out_list, max_list)]
-                out_mean = np.mean(np.asarray(resized_response), axis=0)
-
-                # attention map add heuristic low confidence near the boundaries
-                attention_map = generate_attention_map(out_mean.shape)
-                out_mean_attention = np.multiply(attention_map, out_mean)
-                max_row_new, max_col_new = np.unravel_index(np.argmax(out_mean_attention), out_mean_attention.shape)
-
-                # now from the response map we generate the bounding box.
-                show_map, chosen_region, top, left, bottom, right = \
-                    generate_boundingbox_from_response_map(out_mean_attention,
-                                                           max_row_new, max_col_new)
-
-                img = np.asarray(img_origin)
-                result_dict = {'out_mean_attention': out_mean_attention,
-                               'fusion_response': out_mean_attention[max_row_new, max_col_new] / 255.,
-                               'fish_image': img[top:bottom, left:right, :]}
-                # 	1. Save response map for IoU metadata optimization
-                np.save(os.path.join(self.exp_dir_path, 'test_response_maps', im_name+'.npy'), result_dict)
-
-                time_list.append(time.time() - time_start_batch)
-                eta = (len(test_list)-i) * np.array(time_list).mean()
-                printProgress(i, len(test_list), prefix='Progress:',
-                              suffix='Remaining time: %0.2f sec.' % (eta),
-                              barLength=50)
-
-        test_list = os.listdir(self.args.test_dir_url)
-        if not len(test_list) == 1000:
-            raise AssertionError()
-
-        # a script to save extracted test images:
-        test_image_dir = os.path.join(self.exp_dir_path, 'test_img')
+        if not os.path.exists(os.path.join(self.exp_dir_path, test_response_map_dir)):
+            os.mkdir(os.path.join(self.exp_dir_path, test_response_map_dir))
         if not os.path.exists(test_image_dir):
             os.mkdir(test_image_dir)
-        for i, im_name in enumerate(test_list):
-            result_dict = np.load(os.path.join(self.exp_dir_path, 'test_response_maps', im_name + '.npy')).item()
+
+        print("test dir url %s, number of test images: %d"%(self.args.test_dir_url, len(test_list)))
+
+        time_list = []
+        if False:
+            for im_num, im_name in enumerate(test_list):
+                if not os.path.isfile((os.path.join(self.exp_dir_path, test_response_map_dir, im_name+'.npy'))):
+                    time_start_batch = time.time()
+                    img = load_img(os.path.join(self.args.test_dir_url, im_name))
+                    # we incorporate NoF class here for minimum change of code
+                    img_origin = img.copy()
+                    # we sample different scale
+                    out_list = []
+                    for i in range(self.total_scale):
+                        basewidth = int(float(img_origin.size[0]) * self.scale_list[i])
+                        hsize = int((float(img_origin.size[1]) * self.scale_list[i]))
+                        img = img.resize((basewidth, hsize))
+                        x = img_to_array(img)  #
+                        # print("test image is of shape: " + str(x.shape))  # this is a Numpy array with shape (3, 150, 150)
+                        x = x.reshape((1,) + x.shape)
+                        x_new = x - np.asarray(self.resnet50_data_mean)[None, :, None, None]
+                        # predict the model output
+                        out = self.model.predict(x_new)
+                        # print(out.shape)
+                        out = softmax(out)
+                        out_list.append(out[0, 0, :, :])
+
+                    # ########################## visualise the fish detection result
+                    # max_list store the maximum response for different scales
+                    max_list = [np.max(x) for x in out_list]
+                    resize_shape = [x for x in img_origin.size[::-1]]
+                    resized_response = [scipy.misc.imresize(x, resize_shape) * m for x, m in zip(out_list, max_list)]
+                    out_mean = np.mean(np.asarray(resized_response), axis=0)
+
+                    # attention map add heuristic low confidence near the boundaries
+                    attention_map = generate_attention_map(out_mean.shape)
+                    out_mean_attention = np.multiply(attention_map, out_mean)
+                    max_row_new, max_col_new = np.unravel_index(np.argmax(out_mean_attention), out_mean_attention.shape)
+
+                    # now from the response map we generate the bounding box.
+                    show_map, chosen_region, top, left, bottom, right = \
+                        generate_boundingbox_from_response_map(out_mean_attention,
+                                                               max_row_new, max_col_new)
+
+                    img = np.asarray(img_origin)
+                    result_dict = {'out_mean_attention': out_mean_attention,
+                                   'fusion_response': out_mean_attention[max_row_new, max_col_new] / 255.,
+                                   'fish_image': img[top:bottom, left:right, :]}
+                    # 	1. Save response map for IoU metadata optimization
+
+                    np.save(os.path.join(self.exp_dir_path, test_response_map_dir, im_name+'.npy'), result_dict)
+
+                    time_list.append(time.time() - time_start_batch)
+                    eta = (len(test_list)-im_num) * np.array(time_list).mean()
+                    printProgress(im_num, len(test_list), prefix='Progress:',
+                                  suffix='Remaining time: %0.2f sec.' % (eta),
+                                  barLength=50)
+
+        for i, im_name in enumerate(sorted(test_list)[7792:]):
+            result_dict = np.load(os.path.join(self.exp_dir_path, test_response_map_dir, im_name + '.npy')).item()
             img = result_dict['fish_image']
-            scipy.misc.imsave(os.path.join(test_image_dir, im_name), img)
+            scipy.misc.imsave(os.path.join(self.exp_dir_path, 'test_img_stg2', im_name), img)
 
         return 1
 
     def classify_test(self):
         test_list = os.listdir(self.args.test_dir_url)
-        if not len(test_list) == 1000:
-            raise AssertionError()
-        fish_classes = ['ALB', 'BET', 'DOL', 'LAG', 'NoF', 'OTHER', 'SHARK', 'YFT']
-        from keras.models import load_model
-        model = load_model(os.path.join(self.exp_dir_path, 'fine_tuned_top_model_no_enhancement.h5'))
+        if len(test_list) == 1000:
+            test_response_map_dir = 'test_response_ma ps'
+        elif len(test_list) == 12153:
+            test_response_map_dir = 'test_response_maps_stg2'
 
+        fish_classes = ['ALB', 'BET', 'DOL', 'LAG', 'NoF', 'OTHER', 'SHARK', 'YFT']
         time_list = []
         test_result = {}
-        for im_id, im_name in enumerate(test_list):
+
+        # night fish classifier:
+        #day_model = keras.models.load_model('./exp_dir/fish_classification/bottleneck_top_model_avgpool_further_fine_tune.h5')
+
+        self.model.name = 'day_boat_model'
+        night_model = keras.models.load_model('./exp_dir/fish_classification/day_fish_classifier.h5')
+        night_model.name = "night_boat_model"
+        # loading a GMM for colormean classfication
+        with open('./exp_dir/night_boat_classifier.pkl', 'rb') as fid:
+            gmix_color_mean = cPickle.load(fid)
+
+        debug = True
+        scale = [0.90 ** i for i in range(4)]
+        start_frame = 80
+        incr_frame = 1
+        if debug:
+            test_list_all = sorted(test_list)[start_frame:start_frame+incr_frame]
+        else:
+            test_list_all = sorted(test_list)
+        ############# main loop ##################
+        for im_id, im_name in enumerate(test_list_all):
             time_start_batch = time.time()
             test_result[im_name] = {}
-            result_dict = np.load(os.path.join(self.exp_dir_path, 'test_response_maps', im_name+'.npy')).item()
-            img = result_dict['fish_image']
             img_list = []
-            pred_list = []
+            img_all = []
+
+            result_dict = np.load(os.path.join(self.exp_dir_path, test_response_map_dir, im_name + '.npy')).item()
+            # now from the response map we generate the bounding box.
+            out_mean_attention = result_dict['out_mean_attention']
+            max_row_new, max_col_new = np.unravel_index(np.argmax(out_mean_attention), out_mean_attention.shape)
+            # now from the response map we generate the bounding box.
+            show_map, chosen_region, top, left, bottom, right = \
+                generate_boundingbox_from_response_map_square(out_mean_attention,
+                                                       max_row_new, max_col_new)
+            tst_img = load_img(os.path.join(self.args.test_dir_url, im_name))
+            x = img_to_array(tst_img)
+            img = x[:, top:bottom, left:right].transpose(1,2,0)
+            #img = result_dict['fish_image']
+
+            img_mean = x.mean(axis=1).mean(axis=1)
+            label_color_mean = gmix_color_mean.predict(img_mean)
+            if label_color_mean == 0:
+                boat_str = "it is a day boat"
+                # it is a day fish boat
+                #pred_model = self.model
+            else:
+                # it is a night yellowish fish boat
+                boat_str = "it is a night boat"
+                pred_model = night_model
+
+            #img_std = x.std(axis=1).std(axis=1)
             # we have the images of sets with 4 sets of 90 degrees rotation
-            X = np.zeros(shape=(4, 3, self.img_input_shape[0], self.img_input_shape[1]))
+            X = np.zeros(shape=(4*len(scale), 3, self.img_input_shape[0], self.img_input_shape[1]))
+            # we also crop 3 scales in the
             img_list.append(img)
             for i in range(3):
                 img_list.append(np.rot90(img_list[-1]))
+                for s in scale:
+                    width = img_list[-1].shape[0]
+                    w_s = width*s/2
+                    height = img_list[-1].shape[1]
+                    h_s = height*s/2
+                    im_scale = img_list[-1][width/2-w_s: width/2+w_s, height/2-h_s:height/2+h_s]
+                    img_all.append(scipy.misc.imresize(im_scale, self.img_input_shape))
 
-            for i,im in enumerate(img_list):
-                x = scipy.misc.imresize(im, self.img_input_shape)
-                x = x.transpose(2, 0, 1)
+            if False:
+                plt.figure(9)
+                for i, im in enumerate(img_all):
+                    plt.subplot(3, 4, i + 1)
+                    plt.imshow(im)
+
+            for i, im in enumerate(img_all):
+                x = im.transpose(2, 0, 1)
                 # x have shape (None, 3, 200, 200)
                 x = x.reshape((1,) + x.shape).astype('float32')
-                x[:, 0, :, :] -= 103.939
-                x[:, 1, :, :] -= 116.779
-                x[:, 2, :, :] -= 123.68
-                # x = preprocess_input(x)
+                # x[:, 0, :, :] -= self.resnet50_data_mean[0]
+                # x[:, 1, :, :] -= self.resnet50_data_mean[1]
+                # x[:, 2, :, :] -= self.resnet50_data_mean[2]
+                # x = x - np.asarray(self.resnet50_data_mean)[None, :, None, None]
+                x = preprocess_input(x)
                 # # -- we should not use this because of training regime!
                 X[i] = x
 
-            prediction = model.predict(X)
-            #pred_list.append(prediction)
-            # we average the 4 rotations' predictions
+            prediction = pred_model.predict(X.astype('float32'))
+            # we average the rotation+scale predictions
             preds = np.asarray(prediction).mean(axis=0)
             if False:
+                plt.figure(10)
                 for i, im in enumerate(img_list):
-                    plt.subplot(1,4,i+1)
+                    plt.subplot(1, 4, i + 1)
                     plt.imshow(im)
-                    fidx = np.argmax(pred_list[i])
+                    fidx = np.argmax(prediction[i])
                     fname = fish_classes[fidx]
-                    plt.title("%s: %.3f"%(fname, prediction[i][0, fidx]))
+                    plt.title("%s: %.3f" % (fname, prediction[i][fidx]))
                     plt.waitforbuttonpress(1)
+
+            if debug:
+                # attention map add heuristic low confidence near the boundaries
+                plt.subplot(2, 2, 1)
+                plt.imshow(tst_img)
+                plt.title("image name: %s \n %s "%(im_name, boat_str))
+                plt.waitforbuttonpress(1)
+
+                ax2 = plt.subplot(2, 2, 2)
+                ax2.cla()
+                plt.imshow(result_dict['out_mean_attention'])
+                ax2.text(right, bottom, "max response: %.3f" % (result_dict['fusion_response']), bbox={'facecolor': 'white', 'pad': 10})
+                plt.waitforbuttonpress(1)
+
+                ax3 = plt.subplot(2, 2, 3)
+                ax3.cla()
+                ax3.imshow(show_map)
+                rect = patches.Rectangle((left, top), right-left, bottom-top,linewidth=1, edgecolor='r', facecolor='none')
+                ax3.add_patch(rect)
+                plt.waitforbuttonpress(1)
+
+                ax4 = plt.subplot(2, 2, 4)
+                ax4.cla()
+                fidx = np.argmax(preds)
+                fname = fish_classes[fidx]
+                ax4.imshow(scipy.misc.imresize(img_list[0], self.img_input_shape))
+                ax4.text(20, 20, "%s: %.3f" % (fname, preds[fidx]), bbox={'facecolor': 'white', 'pad': 10})
+                plt.waitforbuttonpress(3)
 
             test_result[im_name]['preds'] = preds
             test_result[im_name]['fusion_response'] = result_dict['fusion_response']
@@ -1493,11 +1585,11 @@ class FishClass(BaseTrainer):
                           suffix='Remaining time: %0.2f sec.' % (eta),
                           barLength=50)
 
-        def do_clip(arr, mx):
-            return np.clip(arr, (1 - mx) / 7, mx)
+        def do_clip(arr, mx, other_num=7):
+            return np.clip(arr, (1 - mx) / other_num, mx)
 
-        def format(value):
-            return "%.10f" % do_clip(value, 0.95)
+        def format(value, clip_value=0.95):
+            return "%.17f" % do_clip(value, clip_value)
 
         timestr = time.strftime("%Y%m%d-%H%M%S")
         with open('./exp_dir/fish_classification/submission/'+timestr+'_submission.csv', 'w') as f:
@@ -1510,7 +1602,10 @@ class FishClass(BaseTrainer):
             f.write('\n')
 
             for im_name in sorted(test_result.keys()):
-                f.write(im_name)
+                if len(test_list) == 12153:
+                    f.write("test_stg2/" + im_name)
+                elif len(test_list) == 1000:
+                    f.write(im_name)
                 f.write(',')
                 # if test_result[im_name]['fusion_response']<0.3:
                 #     print(im_name)

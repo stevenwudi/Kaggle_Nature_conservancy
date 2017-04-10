@@ -87,6 +87,51 @@ def generate_boundingbox_from_response_map(out_mean_attention,
 
     return show_map, chosen_region, top, left, bottom, right
 
+def generate_boundingbox_from_response_map_square(out_mean_attention,
+                                           max_row_new, max_col_new,
+                                           mul_factor=0.5, threshold=255*0.5,
+                                           expand_ratio=1.4):
+    """
+
+    :param out_mean_attention:
+    :param max_row_new:
+    :param max_col_new:
+    :param mul_factor:  A coefficient for binary mask
+    :param expand_ratio:  A ratio for width and height expand to have a complete fish
+                            bounding box
+    :return:
+    """
+    from skimage import measure
+    #response_binary = out_mean_attention > (out_mean_attention.max() * mul_factor)
+    response_binary = out_mean_attention > threshold
+    L, nums = measure.label(response_binary, return_num=True)
+    #print("Number of components:", np.max(L))
+
+    label = L[max_row_new, max_col_new]
+    show_map = np.multiply(response_binary, L) * 255.0 / nums
+    chosen_region = L==label
+
+    # we then find the bounding box according to the chosen region
+    cols = chosen_region.max(axis=0)
+    left = np.asarray(np.nonzero(cols)).min()
+    right = np.asarray(np.nonzero(cols)).max()
+    rows = chosen_region.max(axis=1)
+    top = np.asarray(np.nonzero(rows)).min()
+    bottom = np.asarray(np.nonzero(rows)).max()
+
+    center = [max_col_new, max_row_new]
+    width = int((right-left) * expand_ratio)
+    height = int((bottom - top) * expand_ratio)
+    width = max(width, height)
+    height = max(width, height)
+
+    left = int(max(0, center[0] - width/2.))
+    top = int(max(0, center[1] - height/2.))
+    right = int(min(L.shape[1], center[0] + width/2.))
+    bottom = int(min(L.shape[0], center[1] + height/2.))
+
+    return show_map, chosen_region, top, left, bottom, right
+
 
 def bb_intersection_over_union(rect_pred, rect_gt, detection_area_ratio=0.5):
     # Intersection over Union (IoU)
